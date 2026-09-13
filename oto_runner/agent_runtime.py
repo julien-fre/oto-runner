@@ -165,6 +165,7 @@ class AgentResult:
     reply: str
     steps: list = field(default_factory=list)
     stopped: str = "end_turn"   # end_turn | max_steps | max_tokens | refusal | no_reply
+    #                             | appel_mal_encode
     usage: dict = field(default_factory=dict)
     messages: list = field(default_factory=list)
     raw_outputs: Optional[list] = None   # les entrées BRUTES du fournisseur,
@@ -173,6 +174,8 @@ class AgentResult:
     model: Optional[str] = None          # la version CONCRÈTE qui a tourné,
     # quand le provider sait la résoudre (chemin Conversations) : un alias
     # flottant ne se date pas après coup. Les autres providers laissent None.
+    defaut: Optional[dict] = None        # le défaut de forme qui a ARRÊTÉ la
+    # boucle (cf. `Turn.defaut`) — `None` quand elle s'est arrêtée autrement.
 
 
 # `on_turn(role, content_neutre, provider_raw)` : le point d'ancrage du FIL (R1).
@@ -326,6 +329,8 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
     stopped = "end_turn"
     reply = ""
     servi: Optional[str] = None
+    defaut: Optional[dict] = None
+    n_tours = 0
 
     for _ in range(plafond + 1):
         # ⚠️ Le tour est CHRONOMÉTRÉ : sans ça, un journal ne dit pas si un tour a
@@ -338,6 +343,7 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
                                  modele=spec.model,
                                  on_event=on_event)
         duree_tour_ms = int((time.monotonic() - debut_tour) * 1000)
+        n_tours += 1
         for k in USAGE_KEYS:
             usage[k] = usage.get(k, 0) + int(turn.usage.get(k) or 0)
         # Le DERNIER tour fait foi : un fournisseur qui bascule d'alias en cours
@@ -349,6 +355,20 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
              usage=dict(turn.usage or {}), modele=turn.model,
              temperature=turn.temperature,
              duree_ms=duree_tour_ms, brut=turn.raw_content)
+
+        # ⚠️ Un appel d'outil rendu en TEXTE n'est pas une conclusion (job 17275) :
+        # le prendre pour la réponse finale faisait un travail `done` sans rien
+        # écrire. Il n'est pas exécuté non plus — le JSON d'un texte n'est pas un
+        # appel. Le tour est déjà compté (usage ci-dessus) et journalisé (`modele`,
+        # brut compris) ; la boucle s'arrête en le NOMMANT, et c'est à qui conclut
+        # le travail d'en faire un échec.
+        # ⚠️ AVANT la borne de jetons : un tour mal encodé qui franchit la borne
+        # serait sinon un `max_tokens`, conclu `done` — le faux `done` subsistait
+        # (relevé en revue le 13/09/2026).
+        if turn.stop_reason == "appel_mal_encode":
+            note("appel_mal_encode", **(turn.defaut or {}), tour=n_tours)
+            stopped, reply, defaut = "appel_mal_encode", "", turn.defaut
+            break
 
         # ⚠️ La borne se vérifie APRÈS le tour, jamais avant : on ne connaît le
         # coût d'un tour qu'une fois qu'il a eu lieu. Elle empêche donc le tour
@@ -425,7 +445,7 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
     # 100 % des jobs, et « quelles lignes viennent de quel modèle » n'avait plus
     # de réponse (constaté au vol le 02/09, sur des passages réels).
     return AgentResult(reply=reply, steps=steps, stopped=stopped, usage=usage,
-                       messages=messages, model=servi)
+                       messages=messages, model=servi, defaut=defaut)
 
 
 def serialize(payload) -> str:

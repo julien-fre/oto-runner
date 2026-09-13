@@ -366,12 +366,58 @@ def complete(*, system: str, messages: list, tools: list[dict],
         calls.append(ToolCall(id=tc.get("id") or "", name=f.get("name") or "",
                               arguments=args if isinstance(args, dict) else {}))
     contenu = msg.get("content") or ""
+    defaut = None if calls else appel_mal_encode(contenu, _noms_envoyes(tools))
     if isinstance(contenu, list):
         # Mistral rend parfois le contenu en LISTE de blocs typés au lieu
         # d'une chaîne (vécu, job 52 — AttributeError au .strip()).
         contenu = "\n".join(b.get("text", "") for b in contenu
                             if isinstance(b, dict) and b.get("type") == "text")
+    arret = "end_turn" if fin in ("stop", "tool_calls") else fin
     return Turn(text=contenu.strip(),
                 tool_calls=tuple(calls),
-                stop_reason="end_turn" if fin in ("stop", "tool_calls") else fin,
-                raw_content=msg, usage=usage, model=servi, temperature=retenue)
+                stop_reason="appel_mal_encode" if defaut else arret,
+                raw_content=msg, usage=usage, model=servi, temperature=retenue,
+                defaut=defaut)
+
+
+def _noms_envoyes(tools: list[dict]) -> frozenset:
+    """Les noms des outils ENVOYÉS à ce tour (format OpenAI, cf. `format_tools`)."""
+    return frozenset((t.get("function") or {}).get("name")
+                     for t in (tools or ()) if isinstance(t, dict))
+
+
+def appel_mal_encode(contenu, noms: frozenset) -> Optional[dict]:
+    """Un appel d'outil que le fournisseur a rendu en TEXTE au lieu d'un `tool_calls`.
+
+    ⚠️ Vécu : job 17275 (13/09/2026), et deux runs directs (06/09, 09/09). Le
+    message n'a aucun `tool_calls` et se termine en `stop` ; son `content` est
+    une liste où une partie `reference` nomme l'outil, suivie des arguments en
+    texte. Lu comme une conclusion, le travail finissait `done` en deux pas, sans
+    rien écrire, et sa ligne n'était jamais servie par la passe.
+
+    Le critère est STRUCTUREL, et entier :
+    - une partie `{"type": "reference"}` à EXACTEMENT un `reference_ids`,
+      égal au nom d'un outil envoyé à ce tour ;
+    - IMMÉDIATEMENT suivie d'une partie `{"type": "text"}` dont le texte ENTIER
+      se lit en objet JSON.
+    Rien d'autre ne le déclenche : un texte qui contient du JSON (2 545 tours sur
+    45 698 balayés le 13/09), une `reference` vide, une chaîne. Le JSON n'est
+    JAMAIS exécuté : le défaut est décrit, la boucle s'arrête, le travail échoue
+    en le nommant."""
+    if not isinstance(contenu, list):
+        return None
+    for partie, suivante in zip(contenu, contenu[1:]):
+        if not (isinstance(partie, dict) and partie.get("type") == "reference"):
+            continue
+        ids = partie.get("reference_ids")
+        if not (isinstance(ids, list) and len(ids) == 1 and ids[0] in noms):
+            continue
+        if not (isinstance(suivante, dict) and suivante.get("type") == "text"):
+            continue
+        try:
+            arguments = json.loads((suivante.get("text") or "").strip())
+        except ValueError:
+            continue
+        if isinstance(arguments, dict):
+            return {"forme": "reference+texte_json", "outil": ids[0]}
+    return None

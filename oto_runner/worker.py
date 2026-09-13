@@ -382,8 +382,9 @@ def _traiter(backend: Backend, job: dict, provider,
     demande = _modele_courant(provider)
     resultat = conclusion.resultat_declare(res, demande)
     jetons, lus_en_cache = resultat["usage_tokens"], resultat["usage_cache_read"]
-    outcome = "done" if res.stopped == "end_turn" else "blocked"
-    cloture = conclusion.clore(tenu, outcome, job_id=job["id"])
+    echec = conclusion.echec_nomme(res)
+    outcome = "failed" if echec else ("done" if res.stopped == "end_turn" else "blocked")
+    cloture = conclusion.clore(tenu, outcome, note=echec, job_id=job["id"])
     # L'état final et la raison d'arrêt, tels que DÉCLARÉS — la dernière ligne
     # d'un travail qui a conclu. Le modèle DEMANDÉ et le modèle SERVI, tous deux :
     # l'étiquette d'une flotte a trompé deux heures de mesures (06/09) ; quand ils
@@ -391,7 +392,7 @@ def _traiter(backend: Backend, job: dict, provider,
     note("resultat", outcome=outcome, run_id=run_id, run_finish=cloture,
          resultat=resultat, reponse=res.reply, modele_demande=demande,
          modele_servi=res.model)
-    file.complete(job["id"], ok=True, run_id=run_id,
+    file.complete(job["id"], ok=not echec, error=echec, run_id=run_id,
                   result=resultat)
     logger.info("job %s : %s (%s · %d appels · %d jetons (+ %d lus en cache) · "
                 "modèle servi %s%s)", job["id"], outcome, res.stopped, len(res.steps),

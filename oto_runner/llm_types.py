@@ -37,6 +37,11 @@ class Turn:
     # passage, ou celle de l'hôte à défaut, ou rien. Portée par le tour pour que
     # le journal la LISE au lieu de la déduire d'un `.env` relu après coup.
     temperature: Optional[float] = None
+    # Un défaut de FORME constaté dans la réponse du fournisseur — aujourd'hui un
+    # seul : un appel d'outil rendu en texte au lieu d'un `tool_calls`
+    # (`{"forme": "reference+texte_json", "outil": <nom>}`). Décrit, jamais
+    # exécuté ; `None` = tour bien formé.
+    defaut: Optional[dict] = None
 
     @property
     def wants_tools(self) -> bool:

@@ -1,0 +1,14 @@
+{
+ "_source": "tour réel du job 17275 (13/09/2026, mistral-large-2512, passe E), EXPURGÉ : raison sociale, ville et requête remplacées ; structure, types et ordre des parties intacts.",
+ "message": {
+  "role": "assistant",
+  "tool_calls": null,
+  "content": [
+   {"type": "text", "text": "Je travaille sur la ligne réservée (`_id`: `ligne-1`), **MAISON EXEMPLE** (SIREN `000000000`), en appliquant strictement la procédure.\n\n---\n### 1. Actualité générale et sociale\n**Requête** : `serper_search(\"MAISON EXEMPLE VILLE\")` pour couvrir l'actualité."},
+   {"type": "reference", "reference_ids": ["serper_search"]},
+   {"type": "text", "text": "{\"query\": \"MAISON EXEMPLE VILLE\", \"kind\": \"web\", \"num\": 10, \"country\": \"fr\", \"language\": \"fr\"}"}
+  ]
+ },
+ "finish_reason": "stop",
+ "usage": {"prompt_tokens": 60757, "completion_tokens": 284, "prompt_tokens_details": {"cached_tokens": 58496}}
+}

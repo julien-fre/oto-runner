@@ -103,6 +103,21 @@ def resultat_declare(res, modele_par_defaut: str) -> dict:
     }
 
 
+def echec_nomme(res) -> Optional[str]:
+    """Le motif d'ÉCHEC d'une boucle qui a rendu la main sans exception — ou `None`.
+
+    Un seul aujourd'hui : l'appel d'outil rendu en texte (`appel_mal_encode`,
+    job 17275). Ce n'est pas un jugement sur le travail : le fournisseur n'a pas
+    émis l'appel que son propre message annonçait, la boucle n'a donc rien pu
+    exécuter. Conclu `done`, le travail cachait une ligne jamais servie ; conclu
+    en échec nommé, il passe par la mécanique existante des tentatives, et se
+    voit là où les échecs se lisent."""
+    if getattr(res, "stopped", None) != "appel_mal_encode":
+        return None
+    outil = (getattr(res, "defaut", None) or {}).get("outil") or "outil inconnu"
+    return f"appel_outil_mal_encode ({outil})"
+
+
 def en_echec(journal_, tenu: RunEnCours, job: dict, file,
              e: BaseException, modele_demande: str) -> None:
     """Ce qu'un travail MORT doit encore faire : clore son run en `failed` (ce
