@@ -63,7 +63,11 @@ réel est gaté par une relecture d'architecture — ce cran rend la gate mécan
 OTO_BASE=https://mcp.oto.cx          # REST (fil + jobs)
 OTO_MCP_URL=https://mcp.oto.cx/mcp   # face MCP (outils)
 OTO_WORKER_SECRET=otow_…             # le secret de MACHINE du worker — pas un jeton de compte (cf. « Ce que le worker possède »)
-ANTHROPIC_API_KEY=…                  # la clé de modèle = qui paie
+ANTHROPIC_API_KEY=…                  # la clé de modèle = qui paie (repli quand l'org n'en dépose pas)
+OTO_RUNNER_ORG_KEYS_ONLY=1           # AUCUNE clé de plateforme : démarre sans ANTHROPIC_API_KEY, ne
+                                     # réserve que les travaux de SA famille, ne tourne que sur la
+                                     # clé déposée par l'org (le backend arrête le travail sinon).
+                                     # Exige un dépôt nommé et un backend qui déclare `org_key_only`.
 OTO_RUNNER_MODEL=claude-sonnet-5     # le DÉFAUT du worker — un agent qui déclare son modèle le remplace (cf. « Le modèle »)
 OTO_RUNNER_ARMED=1                   # cf. ci-dessus
 OTO_RUNNER_PASSAGES_DIR=passages     # où le worker écrit le JOURNAL de chaque travail

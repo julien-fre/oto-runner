@@ -52,6 +52,10 @@ def _corps_de(client, appel, monkeypatch):
 _DECLARES_PAR_LA_ROUTE = {
     "cursor", "error", "fleet_id", "job_id", "kind", "lease_seconds", "limit",
     "max_attempts", "ok", "op", "payload", "provider", "result", "run_id", "status",
+    # 13/09/2026 — déclaré par `runner.jobs` depuis le lot « worker sans clé propre »
+    # d'oto-backend. ⚠️ N'est ENVOYÉ que par un worker `OTO_RUNNER_ORG_KEYS_ONLY=1` :
+    # un tel worker exige ce backend-là ; un worker ordinaire n'envoie pas le champ.
+    "org_key_only",
 }
 
 

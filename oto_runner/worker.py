@@ -157,6 +157,60 @@ class IdentiteInvalide(RuntimeError):
     le travail. ⚠️ **Ne pas retenter** : réessayer rejouerait le même verdict."""
 
 
+class SansCleDeposee(RuntimeError):
+    """Ce worker ne tourne que sur la clé de l'organisation, et ce travail n'en
+    porte pas. ⚠️ Filet : le backend arrête déjà un tel travail à la réservation
+    (`org_key_only`). Ce refus ne mord que face à un backend qui ne connaîtrait pas
+    ce mode — et il mord AVANT toute session ou run : rien n'est dépensé."""
+
+
+#: Le mode « clés clients seules » (13/09/2026) : le worker ne tient AUCUNE clé de
+#: modèle à lui. Il démarre sans elle, ne réserve que les travaux de sa famille, et
+#: ne tourne que sur la clé que l'organisation du travail a déposée.
+_ENV_CLES_CLIENTS = "OTO_RUNNER_ORG_KEYS_ONLY"
+
+
+def _cles_clients_seules() -> bool:
+    return (os.environ.get(_ENV_CLES_CLIENTS) or "").strip() == "1"
+
+
+def _verifier_cle_au_demarrage(provider, depot: str) -> None:
+    """Échoue FORT au boot si le worker ne pourra payer aucun tour.
+
+    Worker ordinaire : sa clé d'environnement doit exister (le repli quand l'org
+    n'en dépose pas). Worker « clés clients seules » : il n'en a PAS, à dessein —
+    mais il doit nommer le dépôt qu'il consomme, sinon aucune clé ne lui sera
+    jamais remise et il sonderait à vide pour toujours.
+    """
+    if not _cles_clients_seules():
+        provider.resolve_key()
+        return
+    if not depot:
+        raise SystemExit(
+            f"{_ENV_CLES_CLIENTS}=1 mais ce provider ne nomme aucun dépôt de clé : "
+            "aucune clé d'organisation ne peut lui être remise. Vérifie "
+            "OTO_RUNNER_PROVIDER (anthropic) ou OTO_RUNNER_OPENAI_BASE (hôte Mistral).")
+
+
+def _exiger_cle_deposee(job: dict) -> None:
+    """Lève `SansCleDeposee` si ce worker n'a pas de clé à lui et que le travail
+    n'en apporte pas. Sans ce mode : rien à vérifier, le provider retombe sur la
+    clé de l'environnement comme avant."""
+    if _cles_clients_seules() and not job.get("model_key"):
+        raise SansCleDeposee(
+            f"le travail {job.get('id')} n'apporte pas de clé d'organisation, et ce "
+            "worker n'en tient aucune à lui : il n'est pas exécuté. L'organisation "
+            "doit déposer sa clé de modèle, puis relancer l'agent.")
+
+
+def _dire_la_cle(depot: str) -> str:
+    """Qui paie, dit au journal de démarrage — plutôt que déduit d'une facture."""
+    if _cles_clients_seules():
+        return f"de l'org UNIQUEMENT ({depot}) — aucune clé de plateforme"
+    return (f"de l'org quand elle en dépose une ({depot})" if depot
+            else "de la plateforme (aucun dépôt pour cet hôte)")
+
+
 class FamilleEtrangere(RuntimeError):
     """Ce travail demande une famille de modèles que ce worker ne sert pas.
 
@@ -268,6 +322,9 @@ def _traiter(backend: Backend, job: dict, provider,
     # session MCP ou un run : un travail qu'on ne peut pas exécuter ne doit rien
     # coûter, et surtout ne rien laisser derrière lui.
     _exiger_ma_famille(p, provider)
+    # Un worker sans clé propre ne part pas sans celle de l'org — AVANT session ou
+    # run, pour la même raison que la famille : rien ne doit être dépensé.
+    _exiger_cle_deposee(job)
     # Un texte joint par la réservation : refusé ici, AVANT session ou run.
     _exiger_sans_texte_joint(job)
     jeton = job.get("delegated_token")
@@ -509,7 +566,6 @@ def main() -> None:
             "existe pour qu'un worker lancé par accident ne consomme rien.")
     backend = Backend(token=_secret_du_worker())
     provider = get_provider()
-    provider.resolve_key()    # échoue FORT au boot si la clé manque, pas au 1er job
     # Le journal par travail est le contrat « conserver tout » : un répertoire
     # qu'on ne peut pas écrire se dit ICI, pas en faisant échouer le 1er travail.
     passages = journal.preparer()
@@ -521,6 +577,9 @@ def main() -> None:
     # ne correspond à l'hôte configuré, et la plateforme paie — ce qui se dit au
     # journal plutôt que de se déduire d'une facture.
     depot = getattr(provider, "depot", lambda: "")()
+    # Échoue FORT au boot si le worker ne peut payer aucun tour, pas au 1er job.
+    _verifier_cle_au_demarrage(provider, depot)
+    cles_seules = _cles_clients_seules()
     lease_s = 960 if getattr(provider, "ONE_SHOT", False) else _LEASE_S
     # L'alias configuré ET ce qu'il résout : deux workers lancés de part et
     # d'autre d'une bascule le disent au journal, sans qu'on ait à le deviner.
@@ -530,13 +589,17 @@ def main() -> None:
                 "journaux par travail dans %s/<flotte>/<job>.jsonl",
                 backend.base, provider.__name__.rsplit('_', 1)[-1], nom_modele,
                 f" (= {resolu})" if resolu and resolu != nom_modele else "",
-                f"de l'org quand elle en dépose une ({depot})" if depot
-                else "de la plateforme (aucun dépôt pour cet hôte)", passages)
+                _dire_la_cle(depot), passages)
     signal.signal(signal.SIGTERM, _demander_arret)
     signal.signal(signal.SIGINT, _demander_arret)
     while not _arret_demande:
         try:
-            job = backend.claim(lease_seconds=lease_s, depot=depot)
+            # ⚠️ Le mot-clé n'est passé QUE si le mode est posé : un worker
+            # ordinaire fait exactement l'appel d'avant, à l'octet — et toute
+            # autre implémentation de `claim` (doublures, file de flotte) reste
+            # compatible sans être touchée.
+            job = backend.claim(lease_seconds=lease_s, depot=depot,
+                                **({"org_key_only": True} if cles_seules else {}))
         except BackendError as e:
             logger.warning("claim : %s", e)
             time.sleep(_POLL_S)
