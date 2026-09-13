@@ -52,7 +52,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from . import journal, worker
+from . import consigne, journal, worker
 from .backend import Backend
 from .bilan import ecrire_bilan
 from .declaration import FleetSpec, load_spec, payload, spec_depuis_flotte
@@ -70,12 +70,18 @@ def identifiant(stamp: str, n: int) -> str:
     return f"direct-{stamp}-{n}"
 
 
-def travail(spec: FleetSpec, ident: str, jeton: str) -> dict:
+def travail(spec: FleetSpec, ident: str, jeton: str,
+            jointe: Optional[dict] = None) -> dict:
     """Le travail, construit comme la flotte le fait ENFILER : même payload, kind
-    `start`. Le jeton du poste tient lieu de jeton délégué — c'est la seule chose
-    que la file aurait ajoutée, et elle est nommée ici."""
-    return {"id": ident, "kind": "start", "payload": payload(spec),
-            "delegated_token": jeton}
+    `start`. Le jeton du poste tient lieu de jeton délégué, et la procédure jointe
+    (`consigne.jointe`) tient lieu de celle que la réservation aurait jointe — les
+    deux seules choses que la file aurait ajoutées, nommées ici."""
+    job = {"id": ident, "kind": "start", "payload": payload(spec),
+           "delegated_token": jeton}
+    if jointe is not None:
+        job["system"] = jointe["system"]
+        job["consigne"] = jointe["descripteur"]
+    return job
 
 
 class Compteur:
@@ -95,7 +101,7 @@ class Compteur:
 
 
 def boucle(spec: FleetSpec, backend, provider, jeton: str, stamp: str,
-           compteur: Compteur, file: SansFile) -> str:
+           compteur: Compteur, file: SansFile, jointe: Optional[dict] = None) -> str:
     """UN agent : tant qu'il reste un numéro et une ligne dans le tableau, un
     travail — par `worker._un_travail`, le MÊME chemin que le worker. Rend le
     motif d'arrêt de cet agent."""
@@ -104,14 +110,15 @@ def boucle(spec: FleetSpec, backend, provider, jeton: str, stamp: str,
         if restantes == 0:
             logger.info("file du tableau vide — aucun travail de plus n'est lancé")
             return "file vide"
-        job = travail(spec, identifiant(stamp, n), jeton)
+        job = travail(spec, identifiant(stamp, n), jeton, jointe)
         logger.info("travail %s lancé — %d ligne(s) encore à traiter", job["id"], restantes)
         worker._un_travail(backend, job, provider, file=file)
     return f"volume atteint ({compteur.plafond} travaux)"
 
 
 def lancer(spec: FleetSpec, backend, provider, jeton: str, stamp: str,
-           plafond: Optional[int], k: int) -> tuple[dict, str, list]:
+           plafond: Optional[int], k: int,
+           jointe: Optional[dict] = None) -> tuple[dict, str, list]:
     """K agents jusqu'à N travaux ou file vide. Rend (conclus, motif, morts) —
     `conclus` a la forme que l'ordonnanceur de flotte lit (`status`, `result`,
     `run_id`), `morts` les agents sortis en erreur (nom, code)."""
@@ -119,14 +126,14 @@ def lancer(spec: FleetSpec, backend, provider, jeton: str, stamp: str,
     compteur = Compteur(plafond, ctx)
     if k == 1:
         file = SansFile()
-        motif = boucle(spec, backend, provider, jeton, stamp, compteur, file)
+        motif = boucle(spec, backend, provider, jeton, stamp, compteur, file, jointe)
         return file.conclus, motif, []
 
     retours = ctx.Queue()
 
     def agent() -> None:
         file = SansFile()
-        motif = boucle(spec, backend, provider, jeton, stamp, compteur, file)
+        motif = boucle(spec, backend, provider, jeton, stamp, compteur, file, jointe)
         retours.put((file.conclus, motif))
 
     agents = [ctx.Process(target=agent, name=f"agent-{i + 1}") for i in range(k)]
@@ -181,6 +188,13 @@ def jouer(spec: FleetSpec, backend, provider, jeton: str, plafond: Optional[int]
     sortie, comme la flotte. Rend le bilan ; lève après l'avoir posé si un agent
     est mort."""
     stamp = stamp or horodatage()
+    # ⚠️ AVANT tout le reste : une procédure déclarée qu'on ne peut pas joindre
+    # arrête le passage ici, nommément — rien n'est compté, rien n'est lancé.
+    jointe = consigne.jointe(backend, spec.procedure, spec.org)
+    d = jointe["descripteur"]
+    logger.info("procédure jointe : %s v%s · %d caractères · sha256 %s · rendu %s — "
+                "la même pour tous les travaux du passage", d["slug"], d["version"],
+                d["caracteres"], d["sha256"][:16], d["rendu"])
     demande = worker._modele_courant(provider)
     lignes_initiales = backend.count_rows(spec.namespace, filter=spec.filter, org=spec.org)
     logger.info("mode direct — %s · tableau %s · filtre %s · %d ligne(s) à traiter · "
@@ -196,7 +210,8 @@ def jouer(spec: FleetSpec, backend, provider, jeton: str, plafond: Optional[int]
     t0 = time.monotonic()
     conclus, motif, morts = {}, "interrompu", []
     try:
-        conclus, motif, morts = lancer(spec, backend, provider, jeton, stamp, plafond, k)
+        conclus, motif, morts = lancer(spec, backend, provider, jeton, stamp, plafond, k,
+                                       jointe)
         if morts:
             motif = f"interrompu : agent(s) mort(s) {morts}"
         return_bilan = None
