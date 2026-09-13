@@ -287,7 +287,6 @@ mêmes outils, même boucle, même journal — se joue de deux façons :
 | la file de jobs | `POST /api/me/runner/jobs` : enfiler, réserver, lier, battre, conclure | **aucune** — jamais un appel à cette route |
 | le jeton | le jeton **délégué** remis avec chaque job (l'agent agit pour le demandeur) | `OTO_TOKEN` du poste, qui tient lieu de jeton délégué |
 | le modèle | celui que l'agent DÉCLARE, à défaut celui de l'env des **workers** | idem, sur l'env de **ce processus** (`OTO_RUNNER_MODEL`) |
-| la procédure | jointe par la **réservation** (`job.system`, corps brut de la procédure d'org) | jointe **au lancement** par `consigne.jointe` — même source, même corps brut, même version pour tout le passage, descripteur dans `job.consigne` ; introuvable = `ProcedureIntrouvable`, rien n'est lancé |
 | le journal JSONL | `passages/<flotte>/<job_id>.jsonl`, **là où le worker tourne** | `passages/<flotte>/direct-<horodatage>-<n>.jsonl`, ici |
 | le bilan | `<flotte>.bilan.json` | `<flotte>.direct-<horodatage>.bilan.json` — même forme |
 

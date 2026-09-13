@@ -258,12 +258,6 @@ class _BackendDirect(BackendStatuts):
     def count_rows(self, namespace, filter=None, org=None):
         return self.counts.pop(0) if len(self.counts) > 1 else self.counts[0]
 
-    def _get(self, chemin, params, org=None):
-        """La procédure d'org que le passage direct joint avant de lancer quoi que ce soit."""
-        assert chemin.startswith("/api/me/instructions/"), chemin
-        return {"slug": chemin.rsplit("/", 1)[-1], "version": 3, "body_md": "la procédure",
-                "archived_at": None}
-
 
 def test_le_bilan_direct_a_la_forme_du_bilan_de_flotte_et_porte_le_modele_servi(monkeypatch, tmp_path, caplog):
     decl = tmp_path / "banc.yaml"
