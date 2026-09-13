@@ -338,7 +338,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
 
     choix = (d.get("choices") or [{}])[0]
     msg = choix.get("message") or {}
-    fin = choix.get("finish_reason") or "stop"
+    fin = choix.get("finish_reason")
     u = d.get("usage") or {}
     # ⚠️ `prompt_tokens` COMPTE les jetons servis par le cache. Les porter tels
     # quels ferait payer au plein tarif, dans nos releves, ce qui est facture
@@ -358,13 +358,21 @@ def complete(*, system: str, messages: list, tools: list[dict],
     calls = []
     for tc in (msg.get("tool_calls") or []):
         f = tc.get("function") or {}
+        brut = f.get("arguments")
         try:
-            args = json.loads(f.get("arguments") or "{}")
-        except Exception:  # noqa: BLE001 — des arguments malformés sont un appel
-            # invalide, pas un crash : le modèle recevra l'erreur de l'outil
-            args = {}
+            args = json.loads(brut) if isinstance(brut, str) else None
+        except ValueError:
+            args = None
+        # ⚠️ Des arguments qui ne sont pas un OBJET JSON ne se réparent pas. Les
+        # remplacer par `{}` faisait EXÉCUTER l'outil sans eux — un outil à paramètres
+        # facultatifs agissait (audit du 13/09/2026). Un vrai `"{}"` reste valide ;
+        # une chaîne illisible, une liste ou une absence ne le sont pas : l'appel
+        # porte ce qui a été rendu, et la boucle refuse de l'exécuter.
+        valide = isinstance(args, dict)
         calls.append(ToolCall(id=tc.get("id") or "", name=f.get("name") or "",
-                              arguments=args if isinstance(args, dict) else {}))
+                              arguments=args if valide else {},
+                              arguments_invalides=None if valide else (
+                                  brut if isinstance(brut, str) else json.dumps(brut))))
     contenu = msg.get("content") or ""
     defaut = None if calls else appel_mal_encode(contenu, _noms_envoyes(tools))
     if isinstance(contenu, list):
@@ -372,10 +380,20 @@ def complete(*, system: str, messages: list, tools: list[dict],
         # d'une chaîne (vécu, job 52 — AttributeError au .strip()).
         contenu = "\n".join(b.get("text", "") for b in contenu
                             if isinstance(b, dict) and b.get("type") == "text")
-    arret = "end_turn" if fin in ("stop", "tool_calls") else fin
+    # ⚠️ Deux fins seulement CONCLUENT un tour : `stop`, et `tool_calls` quand un appel
+    # est là. Toute autre — `length`, `model_length` (sortie coupée), `error`, absente,
+    # inconnue — est une fin ANORMALE : la réponse ou l'appel peut être incomplet. Lue
+    # `end_turn`, elle concluait `done` un travail tronqué (audit du 13/09/2026). Et
+    # `tool_calls` sans aucun appel ne fabrique pas une réussite. Énumérations lues le
+    # 13/09/2026 : Mistral stop|length|model_length|error|tool_calls, Scaleway
+    # stop|length|tool_calls, OpenAI y ajoute content_filter (refus, plus haut).
+    anormale = fin != "stop" and not (fin == "tool_calls" and (calls or defaut))
+    if anormale:
+        defaut = {"forme": "fin_anormale", "finish_reason": fin}
     return Turn(text=contenu.strip(),
                 tool_calls=tuple(calls),
-                stop_reason="appel_mal_encode" if defaut else arret,
+                stop_reason=("fin_anormale" if anormale
+                             else "appel_mal_encode" if defaut else "end_turn"),
                 raw_content=msg, usage=usage, model=servi, temperature=retenue,
                 defaut=defaut)
 

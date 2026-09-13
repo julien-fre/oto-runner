@@ -95,6 +95,9 @@ def resultat_declare(res, modele_par_defaut: str) -> dict:
         "usage_cache_read": int(res.usage.get("cache_read_input_tokens") or 0),
         "usage_cache_write": int(res.usage.get("cache_creation_input_tokens") or 0),
         "stopped": res.stopped,
+        # Le défaut de forme qui a arrêté la boucle, BRUT (motif de fin du fournisseur,
+        # outil de l'appel mal encodé) — `None` quand elle s'est arrêtée autrement.
+        "defaut": res.defaut,
         "steps": len(res.steps),
         "tool_counts": compte,
         # ⚠️ Repli SUR LE WORKER, pas seulement dans les transports : c'est ce qui
@@ -109,16 +112,21 @@ def resultat_declare(res, modele_par_defaut: str) -> dict:
 def echec_nomme(res) -> Optional[str]:
     """Le motif d'ÉCHEC d'une boucle qui a rendu la main sans exception — ou `None`.
 
-    Un seul aujourd'hui : l'appel d'outil rendu en texte (`appel_mal_encode`,
-    job 17275). Ce n'est pas un jugement sur le travail : le fournisseur n'a pas
-    émis l'appel que son propre message annonçait, la boucle n'a donc rien pu
-    exécuter. Conclu `done`, le travail cachait une ligne jamais servie ; conclu
-    en échec nommé, il passe par la mécanique existante des tentatives, et se
-    voit là où les échecs se lisent."""
-    if getattr(res, "stopped", None) != "appel_mal_encode":
-        return None
-    outil = (getattr(res, "defaut", None) or {}).get("outil") or "outil inconnu"
-    return f"appel_outil_mal_encode ({outil})"
+    Deux aujourd'hui, et aucun n'est un jugement sur le travail :
+    - l'appel d'outil rendu en texte (`appel_mal_encode`, job 17275) : le
+      fournisseur n'a pas émis l'appel que son propre message annonçait ;
+    - la fin anormale d'un tour (`fin_anormale`) : sortie coupée, erreur du
+      fournisseur, fin non déclarée — la réponse ou l'appel peut être incomplet.
+    Conclus `done`, ces travaux cachaient une ligne jamais servie ; conclus en
+    échec nommé, ils passent par la mécanique existante des tentatives, et se
+    voient là où les échecs se lisent."""
+    arret = getattr(res, "stopped", None)
+    defaut = getattr(res, "defaut", None) or {}
+    if arret == "appel_mal_encode":
+        return f"appel_outil_mal_encode ({defaut.get('outil') or 'outil inconnu'})"
+    if arret == "fin_anormale":
+        return f"fin_anormale ({defaut.get('finish_reason') or 'non déclarée'})"
+    return None
 
 
 def rendre(file, job_id, ok: bool, error: Optional[str], run_id: Optional[str],

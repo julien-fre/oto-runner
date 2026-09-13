@@ -18,6 +18,10 @@ class ToolCall:
     id: str
     name: str
     arguments: dict
+    # Les arguments TELS QUE RENDUS, quand ils ne sont pas un objet JSON (chaîne
+    # illisible, liste, absents). L'appel n'est alors pas exécuté
+    # (`agent_runtime.execute_tool`) : `arguments` reste vide, et ceci fait foi.
+    arguments_invalides: Optional[str] = None
 
 
 @dataclass(frozen=True)

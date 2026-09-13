@@ -37,15 +37,17 @@ def _reponse(message, finish="stop", usage=None):
 
 
 
-def test_des_arguments_malformes_font_un_appel_vide_pas_un_crash(monkeypatch):
+def test_des_arguments_malformes_ne_sont_pas_repares(monkeypatch):
+    """Ce banc disait « l'outil recevra {} et rendra son erreur » : un outil à
+    paramètres facultatifs, lui, AGISSAIT sur `{}` (audit du 13/09/2026). L'original
+    fait foi, et l'appel n'est pas exécuté (cf. `test_fins_et_arguments`)."""
     msg = {"role": "assistant", "content": None,
            "tool_calls": [{"id": "c1", "function": {"name": "data_rows",
                                                     "arguments": "{pas du json"}}]}
     monkeypatch.setattr(P.requests, "post",
                         lambda *a, **k: _Resp(_reponse(msg, finish="tool_calls")))
     turn = P.complete(system="s", messages=[], tools=[], api_key="k")
-    assert turn.tool_calls[0].arguments == {}, \
-        "l'outil recevra {} et rendra son erreur — le modèle se corrigera"
+    assert getattr(turn.tool_calls[0], "arguments_invalides", None) == "{pas du json"
 
 
 def test_content_filter_est_un_refus_terminal(monkeypatch):

@@ -263,6 +263,13 @@ def execute_tool(spec: AgentSpec, transport: ToolTransport,
         return (f"Outil `{call.name}` indisponible pour ce run. "
                 f"Outils autorisés : {', '.join(sorted(spec.tools)) or '(aucun)'}.",
                 True, False)
+    if call.arguments_invalides is not None:
+        # ⚠️ Des arguments qui ne sont pas un objet JSON : l'appel n'est NI exécuté NI
+        # réparé. Le modèle lit pourquoi, et renvoie l'appel s'il le veut — par la
+        # boucle et ses bornes, jamais par un rejeu caché du transport.
+        return (f"Appel de `{call.name}` NON exécuté : ses arguments ne sont pas un "
+                f"objet JSON ({call.arguments_invalides[:200]!r}). Renvoie l'appel avec "
+                "un objet JSON valide.", True, False)
     try:
         text, is_error = transport.call(call.name, call.arguments or {})
         if is_error and _est_transitoire(text):
@@ -369,6 +376,14 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
             note("appel_mal_encode", **(turn.defaut or {}), tour=n_tours)
             stopped, reply, defaut = "appel_mal_encode", "", turn.defaut
             break
+        # ⚠️ Une fin ANORMALE — sortie coupée, erreur du fournisseur, fin non déclarée :
+        # la réponse ou l'appel de ce tour peut être incomplet. Rien n'est exécuté ni
+        # conclu ; la boucle s'arrête en la NOMMANT, et qui conclut le travail en fait
+        # un échec (audit du 13/09/2026 : `length` sans appel concluait `done`).
+        if turn.stop_reason == "fin_anormale":
+            note("fin_anormale", **(turn.defaut or {}), tour=n_tours)
+            stopped, reply, defaut = "fin_anormale", "", turn.defaut
+            break
 
         # ⚠️ La borne se vérifie APRÈS le tour, jamais avant : on ne connaît le
         # coût d'un tour qu'une fois qu'il a eu lieu. Elle empêche donc le tour
@@ -410,6 +425,7 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
             # ce que le transport a rendu, le modèle lit ce qu'il peut porter.
             pour_le_modele, tronque = _cap(text, limite_sortie)
             note("outil", id=call.id, nom=call.name, arguments=call.arguments,
+                 arguments_invalides=call.arguments_invalides,
                  ok=not is_error, transport_ko=transport_ko, duree_ms=ms,
                  texte=text, tronque_pour_le_modele=tronque,
                  # Ce que le modèle a RÉELLEMENT reçu (marqueur de troncature
