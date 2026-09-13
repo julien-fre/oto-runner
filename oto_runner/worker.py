@@ -82,27 +82,18 @@ def _spec_du_job(job: dict) -> AgentSpec:
     agentique : il injecte l'instruction reçue et laisse tourner. Si le travail
     suppose de lire un objet, c'est l'INSTRUCTION qui le dit et l'AGENT qui le lit.
 
-    ⚠️ Ce qui a changé le 09/09/2026, et ce qui n'a PAS changé. Le travail peut
-    désormais porter un `system` — du texte que la plateforme y a joint à la
-    réservation, au même titre qu'une clé de modèle ou un jeton délégué. Le
-    worker le pose dans le cadre et ne sait pas ce que c'est : il ne va toujours
-    RIEN chercher, et la règle ci-dessus tient entière. Ce qui serait interdit,
-    c'est qu'il lise un objet d'Oto ; recevoir du texte n'est pas le lire.
-
-    Pourquoi : une consigne que l'agent charge au premier tour est facturée
-    plein tarif au deuxième — la moitié du coût d'un déroulé mesuré, cache à
-    zéro sur ce tour. Dans le cadre, elle entre dans le préfixe stable.
+    ⚠️ Du 09 au 13/09/2026, le travail pouvait porter un `system` — le texte de
+    la procédure, joint par la réservation — que ce cadre encadrait avec « ne la
+    recharge pas ». Retiré le 13/09/2026 (décision d'Alexis) : l'agent relisait
+    le texte que la plateforme venait d'injecter, deux copies pour une consigne.
+    La consigne se lit par MCP, et le premier tour la paie plein tarif : c'est le
+    prix accepté d'un worker qui ne porte aucun texte métier. Un `system` encore
+    servi est refusé AVANT exécution (`_exiger_sans_texte_joint`).
     """
     p = job.get("payload") or {}
     outils = frozenset(p.get("tools") or ())
-    joint = (job.get("system") or "").strip()
-    cadre = _SYSTEM_FRAME if not joint else (
-        f"{_SYSTEM_FRAME}\n\n--- LA PROCÉDURE QUI FAIT AUTORITÉ ---\n{joint}\n"
-        "--- fin ---\n\nElle t'est servie ci-dessus, ENTIÈRE : ne la recharge "
-        "pas, même si ton instruction te dit de la lire — ce serait payer deux "
-        "fois le même texte.")
     return AgentSpec(
-        system=cadre,
+        system=_SYSTEM_FRAME,
         tools=outils,
         max_steps=int(p.get("max_steps") or agent_runtime.DEFAULT_MAX_STEPS),
         # ⚠️ Le plafond de JETONS du déroulé, posé par qui enfile. Absent = pas de
@@ -213,6 +204,23 @@ def _exiger_ma_famille(p: dict, provider) -> None:
             "OTO_RUNNER_OPENAI_BASE de ce worker.")
 
 
+class TexteJointIncompatible(RuntimeError):
+    """Ce travail porte un `system` — un texte joint par la réservation. Ce worker
+    n'en injecte plus : l'agent lit sa consigne par MCP, comme son instruction le dit.
+
+    ⚠️ Un producteur ancien sert encore ce champ. L'ignorer ferait tourner un agent
+    pendant que la plateforme croit lui avoir remis un texte : on refuse, en le nommant."""
+
+
+def _exiger_sans_texte_joint(job: dict) -> None:
+    if job.get("system"):
+        raise TexteJointIncompatible(
+            f"le travail {job.get('id')} porte un `system` ({len(job['system'])} caractères "
+            "joints par la réservation) : ce worker ne l'injecte plus, l'agent lit sa "
+            "consigne par MCP. Il n'est pas exécuté — c'est le producteur de ce champ qu'il "
+            "faut retirer, pas le texte qu'il faut ignorer.")
+
+
 def _instruction_du(job: dict) -> str:
     """L'instruction du travail, ou un refus franc — jamais un texte de repli."""
     ordre = ((job.get("payload") or {}).get("input") or "").strip()
@@ -260,6 +268,8 @@ def _traiter(backend: Backend, job: dict, provider,
     # session MCP ou un run : un travail qu'on ne peut pas exécuter ne doit rien
     # coûter, et surtout ne rien laisser derrière lui.
     _exiger_ma_famille(p, provider)
+    # Un texte joint par la réservation : refusé ici, AVANT session ou run.
+    _exiger_sans_texte_joint(job)
     jeton = job.get("delegated_token")
     if not jeton:
         raise SansPorteur(
