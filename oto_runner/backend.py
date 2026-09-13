@@ -54,9 +54,9 @@ def _params_filtre(filter: Optional[dict], limit: int) -> dict:
 
 
 class BackendError(RuntimeError):
-    def __init__(self, message: str, *, status: Optional[int] = None):
+    def __init__(self, message: str, *, status: Optional[int] = None, code: Optional[str] = None):
         super().__init__(message)
-        self.status = status
+        self.status, self.code = status, code   # `code` : celui que le serveur NOMME, jamais déduit
 
 
 class Backend:
@@ -114,11 +114,12 @@ class Backend:
                          headers=entetes, wall_s=120)
         if r.status_code >= 400:
             try:
-                detail = r.json().get("message") or r.json().get("error") or r.text
+                code = r.json().get("error")
+                detail = r.json().get("message") or code or r.text
             except Exception:  # noqa: BLE001
-                detail = r.text
+                code, detail = None, r.text
             raise BackendError(f"{chemin} → {r.status_code} : {str(detail)[:300]}",
-                               status=r.status_code)
+                               status=r.status_code, code=code)
         return r.json() if r.content else {}
 
     def _patch(self, chemin: str, corps: dict,

@@ -23,7 +23,9 @@ que la boucle a dit d'elle-même.
 """
 from __future__ import annotations
 
+import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -32,6 +34,7 @@ from .backend import BackendError
 logger = logging.getLogger("oto_runner")
 
 _NOTE_MAX = 400        # ce qu'on met dans la note d'un run_finish / d'un complete
+_PAUSES_S = (2, 4)     # renvois d'une conclusion dont la réponse s'est perdue
 
 
 @dataclass
@@ -116,6 +119,63 @@ def echec_nomme(res) -> Optional[str]:
         return None
     outil = (getattr(res, "defaut", None) or {}).get("outil") or "outil inconnu"
     return f"appel_outil_mal_encode ({outil})"
+
+
+def rendre(file, job_id, ok: bool, error: Optional[str], run_id: Optional[str],
+           result: Optional[dict], note) -> Optional[dict]:
+    """`complete` — et ce qu'on fait quand la file ne prend pas la conclusion.
+
+    Le travail a CONCLU : son run est clos avec sa vraie issue, et `resultat` est
+    déjà au journal. Un refus ici n'est donc pas une mort. Le laisser remonter
+    jusqu'à `en_echec` re-clôturait le run `failed` et rendait à la file, pour
+    être rejoué, un travail qui avait conclu (banc du 13/09/2026 :
+    `result_too_large` après un `done`).
+
+    - `result_too_large` — le CODE que le serveur nomme, pas tout 400 : la charge
+      est trop grosse, l'issue n'est pas en cause ; renvoyée une fois, réduite
+      par `_resume` ;
+    - réponse perdue (transport, 5xx) : la conclusion a pu être prise ; renvoyée
+      TELLE QUELLE, deux fois au plus (2 s puis 4 s). Un 404 ensuite ne prouve
+      pas qu'elle l'a été : il se dit non rendu, avec ce doute ;
+    - tout autre refus — un 400 de contrat, un 404 d'emblée — ne se rejoue pas.
+
+    Quatre envois au plus. Ne lève pas sur un refus de la file : chacun s'écrit
+    au journal (`conclusion_refusee`), et ce qui reste non rendu se dit en ERREUR
+    au log. Ce worker ne rejoue rien ; la file décide du reste à l'expiration du bail."""
+    charge, renvois, envoi = result, 0, 0
+    while True:
+        envoi += 1
+        try:
+            return file.complete(job_id, ok=ok, error=error, run_id=run_id, result=charge)
+        except BackendError as e:
+            code = getattr(e, "code", None)
+            note("conclusion_refusee", essai=envoi, status=e.status, code=code, erreur=str(e))
+            if code == "result_too_large" and result is not None and charge is result:
+                charge = _resume(result, e)
+                continue
+            if (e.status is None or e.status >= 500) and renvois < len(_PAUSES_S):
+                time.sleep(_PAUSES_S[renvois])
+                renvois += 1
+                continue
+            logger.error("job %s : conclusion %s NON rendue à la file — %s%s. Le run est "
+                         "clos, le résultat est au journal ; rien n'est rejoué ici.",
+                         job_id, "ok" if ok else "en échec", e,
+                         " (404 après un renvoi : la conclusion d'avant a PU être prise, "
+                         "rien ne le prouve)" if envoi > 1 and e.status == 404 else "")
+            return None
+
+
+def _resume(result: dict, e: BackendError) -> dict:
+    """La charge d'une conclusion refusée pour sa TAILLE : les valeurs SCALAIRES du
+    résultat — compteurs d'usage et leurs ventilations, arrêt, pas, modèle —, sans
+    ses conteneurs, et le refus borné. Une consommation connue reste connue : la
+    retirer ferait lire zéro là où des jetons ont été payés. Le détail complet
+    reste l'événement `resultat` du journal."""
+    scalaires = {k: v[:_NOTE_MAX] if isinstance(v, str) else v for k, v in result.items()
+                 if v is None or isinstance(v, (bool, int, float, str))}
+    return {**scalaires, "conclusion_refusee": {"status": e.status, "code": getattr(e, "code", None),
+                                                "erreur": str(e)[:_NOTE_MAX],
+                                                "octets": len(json.dumps(result))}}
 
 
 def en_echec(journal_, tenu: RunEnCours, job: dict, file,
