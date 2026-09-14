@@ -11,6 +11,11 @@ Mesuré le 11/09/2026 sur la passe A du banc des textes courts (13 outils) :
   `@empty`, l'écriture par `id`) : 14 cases « @keep — … » sur le lot 01 du vivier.
 D'où le défaut quand la déclaration se tait : `data_write` entière, les autres à 1 024
 (18,9 k caractères sur la même passe).
+
+⚠️ **La même grammaire vit dans le backend** (oto-backend
+`oto_mcp/capabilities/_descriptions_outils.py`, autre dépôt, oto#241) : une campagne hébergée
+la déclare sur `oto_fleet op=create`, le backend la valide à la pose puis la passe au travail
+(`payload["descriptions_outils"]`). Qui change cette forme d'un côté change l'autre (14/09/2026).
 """
 from __future__ import annotations
 

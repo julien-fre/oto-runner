@@ -122,6 +122,10 @@ def _spec_du_job(job: dict) -> AgentSpec:
         # propriété du modèle catalogué, reprise sur un `continue`. Absent = rien de
         # plus qu'avant. Une chaîne vide vaut une absence, comme pour le modèle.
         effort=(str(p["effort"]).strip() or None) if p.get("effort") else None,
+        # Le plafond de complétion porté par le TRAVAIL (oto-backend, 14/09/2026) : une
+        # propriété du modèle catalogué, comme l'effort. Absent = celui de l'hôte.
+        max_output_tokens=(int(p["max_output_tokens"])
+                           if p.get("max_output_tokens") else None),
         label=f"job:{job.get('id')}")
 
 

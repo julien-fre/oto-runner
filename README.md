@@ -74,15 +74,14 @@ OTO_RUNNER_PASSAGES_DIR=passages     # où le worker écrit le JOURNAL de chaque
 OTO_RUNNER_RELANCES_MAX=0            # relances d'un fil qui rend un appel au client
 OTO_RUNNER_EFFORT=…                  # profondeur de raisonnement, défaut de l'HÔTE — Anthropic `output_config.effort`,
                                      # OpenAI-compatible `reasoning_effort` ; ABSENT = rien n'est envoyé. L'effort
-                                     # porté par le TRAVAIL (catalogue : mistral-medium-2604 → high) le remplace ;
+                                     # porté par le TRAVAIL (catalogue : mistral-medium-2604 → high,
+                                     # claude-haiku-4-5 → none, qui n'envoie aucun effort) le remplace ;
                                      # à `temperature: 0` avec un effort, `top_p: 1` part aussi (exigé par Mistral)
-OTO_RUNNER_MAX_TOKENS=8192           # plafond de COMPLÉTION d'un tour (les deux providers)
-OTO_RUNNER_MAX_TOKENS_EFFORT=16000   # plafond de COMPLÉTION d'un tour qui porte l'effort du TRAVAIL — voie Chat
-                                     # Completions seulement (le raisonnement partage la complétion). OBLIGATOIRE dès
-                                     # qu'un travail porte un effort : ABSENT = le tour LÈVE, sans repli. Un effort
-                                     # d'hôte garde OTO_RUNNER_MAX_TOKENS. Ignoré par le provider anthropic
-                                     # (oto-runner-anthropic@1 : chemin inchangé). À retirer quand le catalogue
-                                     # du backend portera une limite par modèle.
+OTO_RUNNER_MAX_TOKENS=8192           # plafond de COMPLÉTION d'un tour (les deux providers), à défaut de celui que
+                                     # porte le TRAVAIL (`max_output_tokens`, déclaré par modèle au catalogue du
+                                     # backend : Large 8192, Medium 16000). Voie Chat Completions : un effort de
+                                     # travail sans plafond porté LÈVE, sans repli sur celui-ci.
+                                     # (OTO_RUNNER_MAX_TOKENS_EFFORT, qui le suppléait, est retirée le 14/09/2026.)
 OTO_RUNNER_MAX_TOOL_OUTPUT=120000    # plafond, en CARACTÈRES, d'une sortie d'outil servie au modèle
 OTO_RUNNER_PARALLEL_TOOLS=1          # 1 (défaut) = le modèle groupe ses appels d'outils dans un
                                      # tour ; 0 = UN SEUL par tour (`parallel_tool_calls: false`)

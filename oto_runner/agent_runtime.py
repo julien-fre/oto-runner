@@ -106,6 +106,10 @@ class AgentSpec:
     # côté backend (14/09/2026 : `mistral-medium-2604` part en `high`). `None` = rien
     # de plus qu'avant : l'hôte (`OTO_RUNNER_EFFORT`), puis le fournisseur.
     effort: Optional[str] = None
+    # Le plafond de COMPLÉTION d'un tour porté par le TRAVAIL — propriété du modèle
+    # catalogué côté backend, comme l'effort (14/09/2026 : 16 000 pour
+    # `mistral-medium-2604`). `None` = celui de l'hôte (`OTO_RUNNER_MAX_TOKENS`).
+    max_output_tokens: Optional[int] = None
     # Le MODÈLE de ce déroulé, déclaré par l'agent qui l'a demandé (oto-backend
     # #939 : le travail porte `payload.model`). `None` = celui du worker, pris
     # dans son environnement — le comportement d'avant, et celui de tout agent
@@ -374,6 +378,7 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
                                  tools=schemas, api_key=api_key,
                                  temperature=spec.temperature,
                                  effort=spec.effort,
+                                 max_output_tokens=spec.max_output_tokens,
                                  modele=spec.model,
                                  on_event=on_event)
         duree_tour_ms = int((time.monotonic() - debut_tour) * 1000)

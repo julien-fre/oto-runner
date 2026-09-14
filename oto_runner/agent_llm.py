@@ -24,7 +24,7 @@ import os
 from typing import Any, Callable, Optional
 
 from .comptage import POSTES
-from .llm_types import LlmUnavailable, ToolCall, Turn
+from .llm_types import EFFORT_SANS_RAISONNEMENT, LlmUnavailable, ToolCall, Turn
 
 # Sonnet par défaut — divergence ASSUMÉE avec le prototype (Opus) : un run hébergé
 # tourne sans humain qui regarde le compteur, et la campagne réelle a montré qu'un
@@ -225,6 +225,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
              temperature: Optional[float] = None,
              modele: Optional[str] = None,
              effort: Optional[str] = None,
+             max_output_tokens: Optional[int] = None,
              on_event: Optional[Callable[[str, dict], None]] = None) -> Turn:
     """UN tour de modèle — synchrone : le worker est un process dédié, pas un
     serveur mono-loop, il a le droit d'attendre.
@@ -265,24 +266,26 @@ def complete(*, system: str, messages: list, tools: list[dict],
     effort_retenu = effort or effort_hote()
     kwargs: dict = {
         "model": nom,
-        # ⚠️ `OTO_RUNNER_MAX_TOKENS_EFFORT` n'est PAS lu ici, et c'est délibéré : ce
-        # provider envoie TOUJOURS un effort (celui du travail ou du worker), si bien
-        # que la règle de la voie Chat Completions changerait le plafond de chaque
-        # requête — et lèverait sur un worker qui ne la pose pas. `oto-runner-anthropic@1`
-        # charge `.env` puis `.env.anthropic` et voit la variable : chemin inchangé.
-        "max_tokens": max_tokens(),
+        # Le plafond que porte le TRAVAIL (le catalogue du backend le déclare par modèle),
+        # à défaut celui du worker. ⚠️ Pas de levée sur un effort sans plafond, à la
+        # différence de la voie Chat Completions : ce provider envoie un effort à chaque
+        # tour et le catalogue ne déclare aucun plafond Claude — lever les ferait tous
+        # échouer.
+        "max_tokens": max_output_tokens or max_tokens(),
         "system": systeme_cache(system),
         "messages": fil_cache(messages),
-        # L'effort du TRAVAIL, à défaut celui du worker (env). Il est fixe sur tout
-        # le déroulé — c'est ce que le cache demande : le faire varier d'un tour à
-        # l'autre invaliderait le fil.
-        "output_config": {"effort": effort_retenu},
     }
+    # L'effort du TRAVAIL, à défaut celui du worker (env). Il est fixe sur tout le
+    # déroulé — c'est ce que le cache demande : le faire varier d'un tour à l'autre
+    # invaliderait le fil. ⚠️ `none` n'envoie RIEN : Haiku 4.5 refuse
+    # `output_config.effort` (400, mesuré le 14/09/2026), et le catalogue le déclare ainsi.
+    if effort_retenu != EFFORT_SANS_RAISONNEMENT:
+        kwargs["output_config"] = {"effort": effort_retenu}
     if tools:
         kwargs["tools"] = outils_cache(tools)
     resp = client.messages.create(**kwargs)
 
-    stop = getattr(resp, "stop_reason", "") or "end_turn"
+    stop = getattr(resp, "stop_reason", None)
     # ⚠️ `input_tokens` n'est QUE le reste NON caché — le volume d'entrée réel vaut
     # input + cache_creation + cache_read. Un run qui cache bien affiche un
     # `input_tokens` minuscule : c'est la somme qui se lit, pas le champ seul.
@@ -315,6 +318,16 @@ def complete(*, system: str, messages: list, tools: list[dict],
                 id=getattr(block, "id", "") or "",
                 name=getattr(block, "name", "") or "",
                 arguments=raw_args if isinstance(raw_args, dict) else {}))
+    # ⚠️ Deux fins seulement CONCLUENT un tour : `end_turn`, et `tool_use` quand un appel
+    # est là — la règle de la voie Chat Completions (audit du 13/09/2026), que celle-ci
+    # n'appliquait pas. `max_tokens` (sortie coupée) se lisait comme une fin : le travail
+    # concluait `done` sur une réponse tronquée, ou exécutait un appel coupé. Énumération
+    # Anthropic lue le 14/09/2026 : end_turn | max_tokens | stop_sequence | tool_use |
+    # pause_turn | refusal (plus haut) | model_context_window_exceeded. Ce provider
+    # n'envoie ni séquence d'arrêt ni outil serveur, et une fin absente n'est pas une fin.
+    anormale = stop != "end_turn" and not (stop == "tool_use" and calls)
     return Turn(text="\n".join(t for t in texts if t.strip()).strip(),
-                tool_calls=tuple(calls), stop_reason=stop,
-                raw_content=raw, usage=usage, model=servi, effort=effort_retenu)
+                tool_calls=tuple(calls),
+                stop_reason="fin_anormale" if anormale else stop,
+                raw_content=raw, usage=usage, model=servi, effort=effort_retenu,
+                defaut={"forme": "fin_anormale", "stop_reason": stop} if anormale else None)

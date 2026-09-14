@@ -11,6 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+#: L'effort qui ne RAISONNE pas (catalogue du backend, 14/09/2026 : claude-haiku-4-5).
+#: Anthropic n'envoie alors aucun `output_config`, et aucun provider n'exige de plafond
+#: de complétion pour lui.
+EFFORT_SANS_RAISONNEMENT = "none"
+
 
 @dataclass(frozen=True)
 class ToolCall:

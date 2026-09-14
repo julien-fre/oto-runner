@@ -27,7 +27,7 @@ from typing import Callable, Optional
 
 import requests
 
-from .llm_types import LlmUnavailable, ToolCall, Turn
+from .llm_types import EFFORT_SANS_RAISONNEMENT, LlmUnavailable, ToolCall, Turn
 
 logger = logging.getLogger("oto_runner")
 
@@ -160,37 +160,32 @@ def max_tokens() -> int:
     return int(brut)
 
 
-_ENV_MAX_TOKENS_EFFORT = "OTO_RUNNER_MAX_TOKENS_EFFORT"
-
-
-def max_tokens_effort() -> int:
-    """`OTO_RUNNER_MAX_TOKENS_EFFORT` — le plafond de COMPLÉTION d'un tour qui porte
-    l'effort de réflexion du TRAVAIL (14/09/2026).
+def plafond_de_sortie(max_output_tokens: Optional[int], effort: Optional[str]) -> int:
+    """Le plafond de COMPLÉTION d'un tour : celui que porte le TRAVAIL, à défaut celui de
+    l'hôte (`max_tokens()`). Le catalogue du backend le déclare par modèle
+    (`max_output_tokens`, 14/09/2026), comme il y déclare l'effort.
 
     ⚠️ Les jetons de raisonnement se comptent dans la complétion et partagent ce
-    plafond avec la réponse. Mesuré au banc d'Audiens le 14/09/2026, `max_tokens` à
+    plafond avec la réponse. Mesuré au banc le 14/09/2026, `max_tokens` à
     16 000 : `mistral-medium-2604` en `high` monte à 6 964 jetons de complétion par
-    tour (p90 3 968), là où `mistral-large-2512` sans effort plafonne à 1 635 — 85 %
-    de 8 192 sur des tours de décision, avant même l'écriture d'une passe.
+    tour (p90 3 968).
 
-    Aucune valeur par défaut : un effort de travail servi sans ce plafond LÈVE, plutôt
-    que de retomber en silence sur `OTO_RUNNER_MAX_TOKENS`. Sans effort de travail,
-    rien ne change — ni `max_tokens()`, ni la requête. Un effort d'HÔTE
-    (`OTO_RUNNER_EFFORT`) garde le plafond ordinaire : cet hôte règle les deux.
+    Un effort de raisonnement porté par le travail SANS plafond porté LÈVE, plutôt que de
+    retomber en silence sur celui de l'hôte, qui couperait la réponse : la coupe se lirait
+    `fin_anormale` sur la fiche plutôt que « catalogue incomplet ». `none` ne raisonne pas.
+    Un effort d'HÔTE (`OTO_RUNNER_EFFORT`) garde le plafond d'hôte : cet hôte règle les deux.
 
-    ⚠️ Surcharge d'hôte, datée : le jour où le catalogue du backend portera une limite
-    par modèle (comme il porte déjà l'effort), elle primera et cette variable sera
-    retirée."""
-    brut = os.environ.get(_ENV_MAX_TOKENS_EFFORT, "").strip()
-    if not brut:
+    Remplace `OTO_RUNNER_MAX_TOKENS_EFFORT`, la surcharge d'hôte qui attendait ce champ du
+    catalogue ; posée sur un hôte, elle n'a plus aucun lecteur."""
+    if max_output_tokens is not None:
+        return max_output_tokens
+    if effort and effort != EFFORT_SANS_RAISONNEMENT:
         raise LlmUnavailable(
-            f"ce tour porte l'effort de réflexion du travail, et {_ENV_MAX_TOKENS_EFFORT} "
-            "n'est pas posé sur ce worker : le raisonnement partage le plafond de "
-            "complétion avec la réponse, et le plafond ordinaire la couperait. Pose-le "
-            "(16000 pour mistral-medium-2604) — il n'y a pas de repli.")
-    if not brut.isdigit() or int(brut) < 1:
-        raise LlmUnavailable(f"{_ENV_MAX_TOKENS_EFFORT} = {brut!r} : un entier ≥ 1 est attendu")
-    return int(brut)
+            f"ce travail porte l'effort de réflexion `{effort}` sans plafond de complétion "
+            "(`max_output_tokens`) : le raisonnement partage ce plafond avec la réponse, et "
+            "celui de l'hôte la couperait. Le catalogue du backend le déclare par modèle "
+            "(`runner_models`) — il n'y a pas de repli.")
+    return max_tokens()
 
 
 def temperature_hote() -> Optional[float]:
@@ -356,6 +351,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
              temperature: Optional[float] = None,
              modele: Optional[str] = None,
              effort: Optional[str] = None,
+             max_output_tokens: Optional[int] = None,
              on_event: Optional[Callable[[str, dict], None]] = None) -> Turn:
     """UN tour de modèle — synchrone, le worker a le droit d'attendre.
 
@@ -368,9 +364,9 @@ def complete(*, system: str, messages: list, tools: list[dict],
     nom = modele or model()
     corps = {
         "model": nom,
-        # L'effort du TRAVAIL raisonne dans la complétion : son plafond est à part
-        # (cf. `max_tokens_effort`). Sans effort de travail, le plafond ordinaire.
-        "max_tokens": max_tokens_effort() if effort else max_tokens(),
+        # Le plafond que porte le TRAVAIL, à défaut celui de l'hôte ; un effort de
+        # travail sans plafond lève (cf. `plafond_de_sortie`).
+        "max_tokens": plafond_de_sortie(max_output_tokens, effort),
         "messages": [{"role": "system", "content": system}, *messages],
         # ⚠️ SANS cette cle, le fournisseur ne met rien en cache — mesure du
         # 01/09 : deux appels identiques, zero jeton mis en cache ; avec elle,
@@ -385,6 +381,10 @@ def complete(*, system: str, messages: list, tools: list[dict],
     # Le travail d'abord, l'hôte à défaut, rien sinon — le même ordre que la
     # température. Calculé UNE fois : le tour le porte, le journal le lit.
     effort_retenu = effort or effort_hote()
+    # ⚠️ `none` PART tel quel, à la différence de la voie Anthropic : c'est une valeur de
+    # l'API (`mistral-medium-2604` n'accepte que `high` et `none`, 400 sur `medium`,
+    # mesuré le 14/09/2026). L'omettre laisserait le défaut du fournisseur, qui peut
+    # raisonner et le facturer.
     if effort_retenu:
         corps["reasoning_effort"] = effort_retenu
     # Le passage d'abord, l'hôte à défaut, rien sinon. Le calcul est fait UNE
