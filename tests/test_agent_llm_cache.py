@@ -163,22 +163,22 @@ def test_l_usage_du_cache_remonte_tel_que_l_api_le_rend(monkeypatch):
                           "cache_read_input_tokens": 9800}
 
 
-def test_sans_cache_dans_la_reponse_les_postes_valent_zero(monkeypatch):
-    """Un préfixe sous le minimum du modèle n'est pas caché, SANS erreur : l'API
-    ne rend simplement pas les champs. Le comportement reste inchangé."""
+def test_sans_cache_dans_la_reponse_les_postes_restent_inconnus(monkeypatch):
+    """Le contrat Anthropic (lu le 13/09/2026) rend TOUJOURS les postes de cache,
+    nullables : « 0 » veut dire pas de cache, et rien ne dit ce que vaut leur absence.
+    Ce banc écrivait « l'API ne rend simplement pas les champs » et en faisait des
+    zéros — des zéros fabriqués. Absents, ils restent inconnus (cf. `comptage`)."""
     _client(monkeypatch, usage=_Usage(input_tokens=300, output_tokens=12))
     turn = P.complete(system="s", messages=[P.user_message("go")], tools=[],
                       api_key="k")
-    assert turn.usage == {"input_tokens": 300, "output_tokens": 12,
-                          "cache_creation_input_tokens": 0,
-                          "cache_read_input_tokens": 0}
+    assert turn.usage == {"input_tokens": 300, "output_tokens": 12}
 
 
-@pytest.mark.parametrize("valeur", [None, 0])
-def test_un_poste_de_cache_nul_ou_absent_vaut_zero(monkeypatch, valeur):
+@pytest.mark.parametrize("valeur,attendu", [(0, 0), (None, "inconnu")])
+def test_un_poste_de_cache_a_zero_vaut_zero_et_null_reste_inconnu(monkeypatch, valeur, attendu):
     _client(monkeypatch, usage=_Usage(input_tokens=1, output_tokens=1,
                                       cache_creation_input_tokens=valeur,
                                       cache_read_input_tokens=valeur))
     turn = P.complete(system="s", messages=[], tools=[], api_key="k")
-    assert turn.usage["cache_read_input_tokens"] == 0
-    assert turn.usage["cache_creation_input_tokens"] == 0
+    assert turn.usage.get("cache_read_input_tokens", "inconnu") == attendu
+    assert turn.usage.get("cache_creation_input_tokens", "inconnu") == attendu

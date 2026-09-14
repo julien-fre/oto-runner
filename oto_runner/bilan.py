@@ -86,14 +86,19 @@ def _postes_jobs(jobs: dict) -> dict:
     # devinait le métier à partir des NOMS d'outils. Un exécuteur d'agents ne
     # sait pas ce qu'écrire veut dire — c'est à qui commande le travail de le
     # juger, sur les comptes d'appels que chaque travail déclare.
-    postes = {"termines": 0, "echoues": 0, "jetons": 0}
+    postes = {"termines": 0, "echoues": 0, "jetons": 0, "sans_usage": 0}
     for jid, job in sorted(jobs.items()):
         statut = job.get("status")
         if statut not in ("done", "failed"):
             raise ValueError(f"bilan : le job {jid} n'est pas conclu (statut "
                              f"{statut!r}) — le bilan ne compte que des jobs conclus")
         resultat = job.get("result") or {}
-        postes["jetons"] += int(resultat.get("usage_tokens") or 0)
+        # ⚠️ Un travail sans usage déclaré se compte À PART : l'ajouter comme un zéro
+        # rendrait un total qui a l'air complet (cf. `comptage`).
+        if resultat.get("usage_tokens") is None:
+            postes["sans_usage"] += 1
+        else:
+            postes["jetons"] += int(resultat["usage_tokens"])
         postes["termines" if statut == "done" else "echoues"] += 1
     return postes
 
@@ -367,6 +372,7 @@ def ecrire_bilan(spec, backend, jobs: dict, *, lignes_initiales: int,
     statut = lignes_par_statut(spec, backend)
     abouties, abouties_omis = abouties_de(statut, sorties)
     conclus = postes["termines"] + postes["echoues"]
+    complet = not postes["sans_usage"]   # un total ne vaut que si chaque travail a déclaré
     refus, refus_omis = refus_ecriture(spec, backend, secondes, jobs)
     # Seulement au bilan de FIN : une ligne peut encore sortir pendant la flotte,
     # et l'annoter à chaque tour ferait du bruit sans rien apprendre.
@@ -410,15 +416,20 @@ def ecrire_bilan(spec, backend, jobs: dict, *, lignes_initiales: int,
         # passer, toutes deux attrapables par une requête : une estampille qui
         # nomme le mauvais modèle, une fiche éteinte dont les notes disent « actif ».
         "controles": controles,
-        "jetons": {"total": postes["jetons"],
-                   "par_job": round(postes["jetons"] / conclus) if conclus else None,
+        # ⚠️ Un seul travail sans usage déclaré, et le total n'en est plus un : `total`
+        # et les ratios passent à null, `connus` garde la somme déclarée et
+        # `travaux_sans_usage` dit combien manquent (cf. `comptage`).
+        "jetons": {"total": postes["jetons"] if complet else None,
+                   "connus": postes["jetons"],
+                   "travaux_sans_usage": postes["sans_usage"],
+                   "par_job": round(postes["jetons"] / conclus) if complet and conclus else None,
                    "par_sortie": (round(postes["jetons"] / sorties)
-                                  if sorties else None),
+                                  if complet and sorties else None),
                    # Le vrai coût d'une campagne : ce que coûte une ligne qui
                    # ABOUTIT, jamais ce que coûte un job (un job peut n'avoir
                    # rien produit). Aucune aboutie ⟹ null, pas une division.
                    "par_aboutie": (round(postes["jetons"] / abouties)
-                                   if abouties else None)},
+                                   if complet and abouties else None)},
         "refus_ecriture": refus,
         "refus_ecriture_omis": refus_omis,
     }

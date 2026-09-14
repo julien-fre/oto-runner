@@ -70,8 +70,8 @@ def test_la_ventilation_par_statut_compte_juste_sur_un_jeu_fictif():
                                 "terminaux": ["enrichi", "echec", "ecarte"]}
     assert b.agregats == [("statut", {"lot_test": "banc"})], (
         "le périmètre est le filtre SANS sa clause de statut")
-    assert bilan["jetons"] == {"total": 3000, "par_job": 1000,
-                               "par_sortie": 1000, "par_aboutie": 3000}
+    assert bilan["jetons"] == {"total": 3000, "connus": 3000, "travaux_sans_usage": 0,
+                               "par_job": 1000, "par_sortie": 1000, "par_aboutie": 3000}
 
 
 def test_la_colonne_de_statut_se_lit_au_schema_pas_a_son_nom():

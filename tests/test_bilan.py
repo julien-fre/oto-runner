@@ -72,8 +72,8 @@ def test_le_cout_par_ligne_vaut_null_quand_rien_nest_sorti():
     bilan = ecrire_bilan(_spec(), b, {1: _job(jetons=4000), 2: _job(jetons=2000)},
                          lignes_initiales=30, secondes=60)
     assert bilan["lignes"]["sorties"] == 0
-    assert bilan["jetons"] == {"total": 6000, "par_job": 3000,
-                               "par_sortie": None, "par_aboutie": None}
+    assert bilan["jetons"] == {"total": 6000, "connus": 6000, "travaux_sans_usage": 0,
+                               "par_job": 3000, "par_sortie": None, "par_aboutie": None}
 
 
 

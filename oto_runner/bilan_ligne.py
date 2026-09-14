@@ -56,12 +56,17 @@ def ligne(bilan: dict, chemin: Optional[str]) -> str:
                                            key=lambda kv: -kv[1])))
     postes.append(f"abouties {lignes['abouties']}" if lignes["abouties"] is not None
                   else f"abouties non mesurées ({lignes['abouties_omis']})")
-    postes.append(f"{_jetons_lisibles(jetons['total'])} jetons")
-    postes.append(f"{_jetons_lisibles(jetons['par_aboutie'])}/aboutie"
-                  if jetons["par_aboutie"] is not None
-                  else f"{_jetons_lisibles(jetons['par_sortie'])}/sortie"
-                  if jetons["par_sortie"] is not None
-                  else "pas de jetons/sortie (0 sortie)")
+    if jetons["total"] is None:
+        # Un total qui manque se dit avec ce qu'on sait — jamais un « — jetons » muet.
+        postes.append(f"{_jetons_lisibles(jetons['connus'])} jetons connus, "
+                      f"{jetons['travaux_sans_usage']} travail(aux) sans usage déclaré")
+    else:
+        postes.append(f"{_jetons_lisibles(jetons['total'])} jetons")
+        postes.append(f"{_jetons_lisibles(jetons['par_aboutie'])}/aboutie"
+                      if jetons["par_aboutie"] is not None
+                      else f"{_jetons_lisibles(jetons['par_sortie'])}/sortie"
+                      if jetons["par_sortie"] is not None
+                      else "pas de jetons/sortie (0 sortie)")
     refus = bilan["refus_ecriture"]
     if refus:
         # ⚠️ Chaque compte NOMME son périmètre. « data_write 3 appels, 2 refusés »

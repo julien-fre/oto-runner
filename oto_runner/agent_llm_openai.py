@@ -243,6 +243,40 @@ def depot() -> str:
     return _DEPOTS_PAR_HOTE.get(urlparse(base_url()).netloc, "")
 
 
+# Les dépôts dont le contrat DOCUMENTÉ définit un `cached_tokens` absent comme zéro.
+# Mistral (docs.mistral.ai, « Prompt caching », lu le 13/09/2026) : « If the API
+# doesn't serve tokens from cache, `cached_tokens` is `0` or omitted. » Scaleway ne
+# rapporte aucun cache sur le chat, et OpenAI a retiré sa garantie du zéro : chez eux
+# l'absence reste INCONNUE. Le zéro est celui du contrat, jamais décidé ici.
+_CACHE_ABSENT_VAUT_ZERO = frozenset({"mistral"})
+
+
+def usage_declare(u: Optional[dict]) -> dict:
+    """L'usage d'un tour tel que le fournisseur le DÉCLARE (cf. `comptage`) : un
+    poste qu'il ne déclare pas n'est pas posé.
+
+    ⚠️ `prompt_tokens` COMPTE les jetons servis par le cache (Mistral : « `prompt_tokens`
+    contains all prompt tokens »). Les porter tels quels ferait payer au plein tarif,
+    dans nos relevés, ce qui est facturé 10 %. Il part donc en `input_total_tokens`,
+    et `input_tokens` — le non caché — n'est posé que si le cache lu est CONNU :
+    cache inconnu, le non-caché l'est aussi (cf. `comptage`)."""
+    if not u:
+        return {}
+    caches = (u.get("prompt_tokens_details") or {}).get("cached_tokens")
+    if caches is None and depot() in _CACHE_ABSENT_VAUT_ZERO:
+        caches = 0
+    usage: dict = {}
+    if caches is not None:
+        usage["cache_read_input_tokens"] = int(caches)
+    if u.get("prompt_tokens") is not None:
+        usage["input_total_tokens"] = int(u["prompt_tokens"])
+        if caches is not None:
+            usage["input_tokens"] = max(0, int(u["prompt_tokens"]) - int(caches))
+    if u.get("completion_tokens") is not None:
+        usage["output_tokens"] = int(u["completion_tokens"])
+    return usage
+
+
 def resolve_key() -> str:
     key = os.environ.get(_ENV_KEY, "").strip()
     if not key:
@@ -339,14 +373,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
     choix = (d.get("choices") or [{}])[0]
     msg = choix.get("message") or {}
     fin = choix.get("finish_reason")
-    u = d.get("usage") or {}
-    # ⚠️ `prompt_tokens` COMPTE les jetons servis par le cache. Les porter tels
-    # quels ferait payer au plein tarif, dans nos releves, ce qui est facture
-    # 10 %. On separe donc, et `input_tokens` ne garde que ce qui est neuf.
-    _caches = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
-    usage = {"input_tokens": max(0, int(u.get("prompt_tokens") or 0) - _caches),
-             "output_tokens": int(u.get("completion_tokens") or 0),
-             "cache_read_input_tokens": _caches}
+    usage = usage_declare(d.get("usage"))
 
     # Ce que le fournisseur DIT avoir servi, à défaut ce qu'on a demandé.
     servi = d.get("model") or nom

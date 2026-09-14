@@ -70,6 +70,32 @@ def clore(tenu: RunEnCours, outcome: str, note: Optional[str] = None,
         return f"refusé : {e}"
 
 
+def _postes_d_usage(usage: Optional[dict], couverture: Optional[dict]) -> dict:
+    """Les postes d'usage tels que le serveur les lit — la MÊME forme pour un déroulé
+    conclu (`resultat_declare`) et un déroulé mort (`resultat_partiel`) : il n'y a
+    qu'une façon de lire un coût, donc qu'une façon de le calculer.
+
+    Le cache de prompt se compte À CÔTÉ, jamais dedans : `input_tokens` est le reste
+    NON caché. `usage_tokens` reste entrée + sortie — la base des bornes de flotte
+    (budget, rendement), et la déplacer les fausserait toutes d'un coup.
+
+    ⚠️ Un poste non déclaré reste `None` : l'additionner comme un zéro ferait lire un
+    coût connu là où le fournisseur n'a rien dit (cf. `comptage`). L'entrée TOTALE
+    déclarée, cache compris, majore le non-caché quand il est inconnu — elle n'est
+    jamais publiée à sa place."""
+    u = usage or {}
+    entree, sortie = u.get("input_tokens"), u.get("output_tokens")
+    return {
+        "usage_tokens": None if entree is None or sortie is None else entree + sortie,
+        "usage_input": entree,
+        "usage_input_total": u.get("input_total_tokens"),
+        "usage_output": sortie,
+        "usage_cache_read": u.get("cache_read_input_tokens"),
+        "usage_cache_write": u.get("cache_creation_input_tokens"),
+        "usage_couverture": couverture,
+    }
+
+
 def resultat_declare(res, modele_par_defaut: str) -> dict:
     """Le résultat DÉCLARÉ (R5) : ce que l'ordonnanceur lit pour ses bornes.
 
@@ -78,22 +104,12 @@ def resultat_declare(res, modele_par_defaut: str) -> dict:
     interpréter : il rend le tour perdu lisible d'un coup d'œil (un agent qui
     analyse et conclut en prose sans rien appeler ne produit aucune erreur ; la
     seule trace est l'écart entre ses mots et ses appels)."""
-    entree = int(res.usage.get("input_tokens") or 0)
-    sortie = int(res.usage.get("output_tokens") or 0)
-    # Le cache de prompt se compte À CÔTÉ, jamais dedans : `input_tokens` est le
-    # reste NON caché, donc les jetons lus en cache ne sont pas dans `jetons`.
-    # `usage_tokens` reste input+output — c'est la base des bornes de flotte
-    # (budget, rendement), et la déplacer les fausserait toutes d'un coup.
     compte: dict = {}
     for s in res.steps:
         if s.ok:
             compte[s.tool] = compte.get(s.tool, 0) + 1
     return {
-        "usage_tokens": entree + sortie,
-        "usage_input": entree,
-        "usage_output": sortie,
-        "usage_cache_read": int(res.usage.get("cache_read_input_tokens") or 0),
-        "usage_cache_write": int(res.usage.get("cache_creation_input_tokens") or 0),
+        **_postes_d_usage(res.usage, res.couverture),
         "stopped": res.stopped,
         # Le défaut de forme qui a arrêté la boucle, BRUT (motif de fin du fournisseur,
         # outil de l'appel mal encodé) — `None` quand elle s'est arrêtée autrement.
@@ -181,6 +197,11 @@ def _resume(result: dict, e: BackendError) -> dict:
     reste l'événement `resultat` du journal."""
     scalaires = {k: v[:_NOTE_MAX] if isinstance(v, str) else v for k, v in result.items()
                  if v is None or isinstance(v, (bool, int, float, str))}
+    # La couverture n'est pas un conteneur à jeter : elle ATTESTE les compteurs gardés, et sans
+    # elle un résultat réduit se lirait « non attesté » (accord fleet/dev du 13/09/2026). Petite
+    # et bornée : quelques entiers par poste.
+    if isinstance(result.get("usage_couverture"), dict):
+        scalaires["usage_couverture"] = result["usage_couverture"]
     return {**scalaires, "conclusion_refusee": {"status": e.status, "code": getattr(e, "code", None),
                                                 "erreur": str(e)[:_NOTE_MAX],
                                                 "octets": len(json.dumps(result))}}
@@ -193,21 +214,19 @@ def resultat_partiel(e: BaseException, modele_demande: str) -> Optional[dict]:
     lire un coût. `stopped` vaut le type de l'exception : la ligne dit alors à la
     fois ce qui a été dépensé et pourquoi ça s'est arrêté.
 
-    ⚠️ `None` quand aucun jeton n'a été mesuré — un déroulé mort AVANT son premier
+    ⚠️ `None` quand aucun TOUR n'a été compté — un déroulé mort avant son premier
     tour n'a rien coûté, et écrire des zéros le ferait passer pour mesuré. C'est
     la même distinction que côté serveur : NULL n'est pas 0.
+
+    ⚠️ Le critère est le nombre de tours, jamais les valeurs des postes : un tour
+    joué dont le fournisseur n'a rien déclaré a été facturé. Ses postes restent
+    `None`, et la couverture dit ce qui les fonde (cf. `comptage`).
     """
-    usage = getattr(e, "usage_partiel", None)
-    if not usage or not any(usage.values()):
+    couverture = getattr(e, "couverture_partielle", None)
+    if not couverture or not couverture.get("tours"):
         return None
-    entree = int(usage.get("input_tokens") or 0)
-    sortie = int(usage.get("output_tokens") or 0)
     return {
-        "usage_tokens": entree + sortie,
-        "usage_input": entree,
-        "usage_output": sortie,
-        "usage_cache_read": int(usage.get("cache_read_input_tokens") or 0),
-        "usage_cache_write": int(usage.get("cache_creation_input_tokens") or 0),
+        **_postes_d_usage(getattr(e, "usage_partiel", None), couverture),
         "stopped": type(e).__name__,
         "steps": int(getattr(e, "pas_partiels", 0) or 0),
         "model": getattr(e, "modele_partiel", None) or modele_demande,

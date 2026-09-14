@@ -231,8 +231,11 @@ def test_une_relance_rejoue_le_fil_avec_un_function_result(monkeypatch):
                            "tool_call_id": "call-abc",
                            "result": C._CONSIGNE_APPEL_RENVOYE}
 
-    assert res.usage == {"input_tokens": 1500, "output_tokens": 150}, \
+    assert (res.usage.get("input_total_tokens"), res.usage.get("output_tokens")) == (1500, 150), \
         "le prix payé est la somme des passes"
+    assert res.usage.get("input_tokens", "absent") is None, \
+        "Conversations ne déclare pas le cache : le non-caché reste inconnu"
+    assert (getattr(res, "couverture", None) or {}).get("tours") == 2
     assert [(s.tool, s.ok) for s in res.steps] == [
         ("demo_lookup", True), (_CALL_BIDON["name"], False),
         ("demo_write", True)], "l'appel rendu reste visible au bilan"
@@ -248,7 +251,7 @@ def test_le_maximum_borne_les_relances(monkeypatch):
     corps = _suite(monkeypatch, [_reponse_avec_appel_renvoye() for _ in range(3)])
     res = C.run_once(instructions="p", inputs="i", tools=("demo_lookup",))
     assert len(corps) == 3, "1 passe + 2 relances, puis stop"
-    assert res.usage == {"input_tokens": 3000, "output_tokens": 300}
+    assert (res.usage.get("input_total_tokens"), res.usage.get("output_tokens")) == (3000, 300)
     assert len(res.steps) == 6
     assert corps[2]["inputs"][-1]["type"] == "function.result"
 

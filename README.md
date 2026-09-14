@@ -219,7 +219,7 @@ d'outils et tous les résultats d'outils déjà lus. Le provider Anthropic pose 
 définition d'`tools`, dernier bloc du dernier message — et une lecture en cache
 se facture ~0,1× le prix d'entrée. ⚠️ Un préfixe sous le minimum du modèle (1024
 jetons sur Sonnet 5) n'est **pas** caché, sans erreur ni avertissement : le seul
-juge est `usage_cache_read` au résultat du job.
+juge est `usage_cache_read` au résultat du job (`null` = non déclaré, pas « pas de cache »).
 
 ## Un job
 
@@ -409,11 +409,24 @@ maximum 107 204 — plus aucune ligne folle.
 > attrape « ça tourne à vide », ce sont les **faux départs en série**, décrits
 > ci-dessus.
 
-Chaque job conclu déclare son coût et sa sortie (`usage_tokens`,
-`usage_cache_read`, `usage_cache_write`, `tool_counts`, `claims`, `writes`,
-`claim_vide`, `faux_depart`, `model`) : c'est ce que l'ordonnanceur lit, sans jamais ouvrir un
-fil. `usage_tokens` reste **input + output** — la base des bornes de flotte
-(budget, rendement) ne bouge pas ; le cache se compte à côté.
+Chaque job conclu déclare son coût et sa sortie (`usage_tokens`, `usage_input`,
+`usage_input_total`, `usage_output`, `usage_cache_read`, `usage_cache_write`,
+`usage_couverture`, `tool_counts`, `claims`, `writes`, `claim_vide`, `faux_depart`,
+`model`) : c'est ce que l'ordonnanceur lit, sans jamais ouvrir un fil. `usage_tokens`
+reste **input + output** — la base des bornes de flotte (budget, rendement) ne bouge
+pas ; le cache se compte à côté. Un travail qui meurt en route déclare la même forme
+(`conclusion.resultat_partiel`), sauf s'il est mort avant son premier tour.
+
+⚠️ **Un poste que le fournisseur ne déclare pas vaut `null`, jamais `0`**
+(`oto_runner/comptage.py`). `usage_tokens` est `null` dès que l'entrée ou la sortie
+manque ; `usage_input_total` (l'entrée déclarée, cache compris) majore alors le
+non-caché sans jamais le remplacer ; `usage_couverture` dit combien de tours ont
+déclaré chaque poste, et quoi. Le zéro n'est posé que là où le contrat écrit du
+fournisseur le définit (le cache du chat Mistral). Conséquences : une borne
+`max_tokens` qui ne peut plus être suivie arrête le déroulé avant le tour suivant
+(`stopped: max_tokens_non_mesurable`) ; un budget de flotte s'arrête « non suivable » ;
+un bilan dont un travail n'a pas déclaré son usage rend `jetons.total: null`, avec
+`connus` et `travaux_sans_usage`.
 
 ## ⚠️ Le 05/09/2026 à 13:05 UTC, `oto_procedure` a changé de sens
 

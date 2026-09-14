@@ -276,17 +276,23 @@ def test_les_postes_de_cache_se_cumulent_sur_tout_le_run():
     res = agent_runtime.run(SPEC, FauxTransport(), p, prompt="go")
     assert res.usage == {"input_tokens": 9300, "output_tokens": 200,
                          "cache_creation_input_tokens": 9200,
-                         "cache_read_input_tokens": 8800}
+                         "cache_read_input_tokens": 8800,
+                         # Aucun tour ne déclare d'entrée totale : inconnue, pas zéro.
+                         "input_total_tokens": None}
 
 
-def test_un_provider_sans_poste_de_cache_ne_casse_pas_le_cumul():
-    """Le chemin OpenAI-compat ne rend que input/output : les postes de cache
-    restent à zéro, jamais absents (l'ordonnanceur lit un dict de forme fixe)."""
+def test_un_provider_sans_poste_de_cache_laisse_le_cache_inconnu():
+    """Un tour qui ne déclare pas le cache n'en déclare pas zéro. Ce banc voulait les
+    postes de cache « à zéro, jamais absents » : des zéros fabriqués (cf. `comptage`).
+    Ils restent inconnus, la couverture le dit, et l'entrée et la sortie restent connues."""
     p = FauxProvider([Turn(text="fini", raw_content=[],
                            usage={"input_tokens": 10, "output_tokens": 3})])
     res = agent_runtime.run(SPEC, FauxTransport(), p, prompt="go")
-    assert res.usage["cache_read_input_tokens"] == 0
-    assert res.usage["cache_creation_input_tokens"] == 0
+    assert (res.usage["input_tokens"], res.usage["output_tokens"]) == (10, 3)
+    assert res.usage["cache_read_input_tokens"] is None
+    assert res.usage["cache_creation_input_tokens"] is None
+    assert res.couverture["tours"] == 1
+    assert res.couverture["declares"]["cache_read_input_tokens"] == 0
 
 
 # ── LA BORNE DE JETONS, appliquée par l'agent lui-même ───────────────────────
@@ -369,7 +375,10 @@ def test_l_ecriture_de_cache_COMPTE_elle():
     """Elle se paie plus cher que l'entrée : l'exclure laisserait un déroulé
     dépenser sans borne en (re)construisant son cache."""
     spec = AgentSpec(system="s", tools=frozenset(), max_steps=10, max_tokens=1000)
-    p = FauxProvider([_tour(cache_creation_input_tokens=1500),
+    # Entrée et sortie DÉCLARÉES (à zéro) : sans elles la borne ne se suit plus, et
+    # l'arrêt serait `max_tokens_non_mesurable` (cf. `test_comptage_usages`).
+    p = FauxProvider([_tour(input_tokens=0, output_tokens=0,
+                            cache_creation_input_tokens=1500),
                       _fin(text="jamais")])
     res = agent_runtime.run(spec, FauxTransport(), p, prompt="go")
     assert res.stopped == "max_tokens"

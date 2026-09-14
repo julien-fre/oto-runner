@@ -21,6 +21,7 @@ from typing import Callable, Optional
 from . import journal
 from .backend import Backend, BackendError
 from .bilan import ecrire_bilan
+from .comptage import jetons_du_budget
 # La déclaration et le travail qu'elle construit vivent dans `declaration.py`,
 # partagés avec le mode direct ; réexportés ici pour qui lit la flotte.
 from .declaration import (FleetSpec, load_spec, spec_depuis_flotte,  # noqa: F401
@@ -108,7 +109,13 @@ _outil_critique_en_panne.dernier = {}
 class FleetBilan:
     done: int = 0
     failed: int = 0
-    usage_tokens: int = 0
+    usage_tokens: int = 0   # la somme des `usage_tokens` CONNUS — pas un total s'il en manque
+    # Ce que le BUDGET compte (cf. `comptage.jetons_du_budget`) : l'exact quand il est
+    # connu, sinon l'entrée totale et la sortie, qui le majorent.
+    jetons_du_budget: int = 0
+    # Les travaux conclus dont le budget ne peut rien compter. Un seul, et un budget
+    # demandé ne se suit plus.
+    jobs_usage_inconnu: int = 0
     lignes_initiales: int = 0
     lignes_restantes: int = 0
     arret: str = ""
@@ -330,15 +337,21 @@ def run_fleet(spec: FleetSpec, backend: Backend, *,
                 # bilan nomme le job — et son journal JSONL — derrière un refus.
                 conclus[jid] = {"status": st, "result": resultat,
                                 "run_id": job.get("run_id"), "journal": chemin}
-                jetons_du_job = int(resultat.get("usage_tokens") or 0)
-                bilan.usage_tokens += jetons_du_job
+                jetons_du_job = resultat.get("usage_tokens")
+                if jetons_du_job is not None:
+                    bilan.usage_tokens += int(jetons_du_job)
+                budget_du_job = jetons_du_budget(resultat)
+                if budget_du_job is None:
+                    bilan.jobs_usage_inconnu += 1
+                else:
+                    bilan.jetons_du_budget += budget_du_job
                 motif = resultat.get("stopped") or "inconnu"
                 bilan.arrets[motif] = bilan.arrets.get(motif, 0) + 1
                 # Le journal de flotte reste compact : une ligne par travail
                 # conclu, qui POINTE vers le journal complet relu.
-                logger.log(niveau, "job %s %s (%s · %d jetons)%s — %s",
+                logger.log(niveau, "job %s %s (%s · jetons : %s)%s — %s",
                            jid, "conclu" if st == "done" else "FAILED", motif,
-                           jetons_du_job,
+                           "inconnus" if jetons_du_job is None else jetons_du_job,
                            "" if st == "done" else f" : {job.get('last_error')}",
                            trace)
                 if st == "done":
@@ -392,8 +405,14 @@ def run_fleet(spec: FleetSpec, backend: Backend, *,
             # conclure. Lui inventer une sortie à part ferait deux façons de
             # s'arrêter, dont une seule serait éprouvée.
             borne = "arrêt demandé" if arret_demande else None
-            if borne is None and spec.budget_tokens is not None and bilan.usage_tokens >= spec.budget_tokens:
-                borne = f"budget atteint ({bilan.usage_tokens} ≥ {spec.budget_tokens} jetons)"
+            if borne is None and spec.budget_tokens is not None and bilan.jobs_usage_inconnu:
+                # ⚠️ Un budget DEMANDÉ ne se suit plus dès qu'un travail n'a pas déclaré
+                # son usage : enfiler encore promettrait un plafond qu'on ne mesure pas.
+                borne = (f"budget non suivable ({bilan.jobs_usage_inconnu} travail(aux) sans "
+                         f"usage déclaré ; {bilan.jetons_du_budget} jetons comptés sur "
+                         f"{spec.budget_tokens})")
+            elif borne is None and spec.budget_tokens is not None and bilan.jetons_du_budget >= spec.budget_tokens:
+                borne = f"budget atteint ({bilan.jetons_du_budget} ≥ {spec.budget_tokens} jetons)"
             elif borne is None and spec.volume is not None and traitees >= spec.volume:
                 borne = f"volume atteint ({traitees} ≥ {spec.volume} lignes)"
             elif borne is None and failed_consecutifs >= plafond_echecs:
@@ -417,8 +436,10 @@ def run_fleet(spec: FleetSpec, backend: Backend, *,
                     sleep(poll_s)
                     continue
                 bilan.arret = borne
-                logger.info("flotte arrêtée : %s — %d done, %d failed, %d jetons",
-                            borne, bilan.done, bilan.failed, bilan.usage_tokens)
+                logger.info("flotte arrêtée : %s — %d done, %d failed, %d jetons connus, "
+                            "%d comptés au budget, %d travail(aux) sans usage déclaré",
+                            borne, bilan.done, bilan.failed, bilan.usage_tokens,
+                            bilan.jetons_du_budget, bilan.jobs_usage_inconnu)
                 # ⚠️ ACCUSER l'arrêt — le seul geste qui pose le FAIT `stopped`.
                 # Sans lui, un arrêt demandé resterait `stopping` pour toujours,
                 # ce qui est précisément le symptôme d'un ordonnanceur MORT : on

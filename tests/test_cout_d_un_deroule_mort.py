@@ -176,3 +176,63 @@ def test_un_echec_SANS_jetons_conclut_quand_meme_sans_resultat():
     conclusion.en_echec(None, tenu, {"id": 78}, file, _lever(tours=0), "m")
     assert file.conclusions[0]["result"] is None
     assert file.conclusions[0]["ok"] is False
+
+
+# ── 4. un déroulé mort garde l'inconnu inconnu (comptage des usages × #16) ────
+
+class _ProviderPeuBavard(_ProviderQuiCasse):
+    """La même casse, mais le fournisseur ne déclare que les postes qu'on lui donne :
+    les autres restent inconnus (cf. `comptage`)."""
+
+    def __init__(self, tours_avant_la_casse=1, usage=None):
+        super().__init__(tours_avant_la_casse)
+        self.usage = {"input_tokens": 1000} if usage is None else usage
+
+    def complete(self, **kw):
+        if self.restants <= 0:
+            raise RuntimeError("le fournisseur a lâché")
+        self.restants -= 1
+        return agent_runtime.Turn(
+            text="", tool_calls=(agent_runtime.ToolCall(id="t0", name="outil", arguments={}),),
+            stop_reason="tool_use", usage=dict(self.usage), raw_content=[],
+            model="claude-opus-5")
+
+
+def _lever_avec(provider):
+    spec = agent_runtime.AgentSpec(system="s", tools=frozenset({"outil"}), max_steps=8)
+    with pytest.raises(RuntimeError) as e:
+        agent_runtime.run(spec, _Transport(), provider, prompt="fais quelque chose")
+    return e.value
+
+
+def test_un_poste_non_declare_d_un_deroule_mort_reste_inconnu_jamais_zero():
+    """⚠️ La conclusion d'un échec additionnait `int(x or 0)` : une sortie que le
+    fournisseur n'a pas déclarée devenait 0, et `usage_tokens` se lisait 1000 — un
+    total présenté comme complet. Il reste `None`, l'entrée connue reste connue, et
+    la couverture dit ce qui fonde les postes."""
+    r = conclusion.resultat_partiel(_lever_avec(_ProviderPeuBavard(1, {"input_tokens": 1000})), "m")
+    assert r is not None, "un tour a été facturé : ce n'est pas « rien dépensé »"
+    assert r["usage_input"] == 1000
+    assert r["usage_output"] is None and r["usage_tokens"] is None
+    assert r["usage_cache_read"] is None and r["usage_cache_write"] is None
+    assert r["usage_couverture"]["tours"] == 1
+
+
+def test_un_tour_facture_sans_aucun_poste_declare_n_est_pas_rien_depense():
+    """⚠️ « Rien dépensé » se jugeait sur les VALEURS (`not any(usage.values())`) : un
+    tour joué dont le fournisseur n'a rien déclaré se lisait comme un déroulé mort avant
+    son premier tour, et son coût disparaissait. Le critère est le nombre de tours."""
+    r = conclusion.resultat_partiel(_lever_avec(_ProviderPeuBavard(2, {})), "m")
+    assert r is not None and r["usage_couverture"]["tours"] == 2
+    assert all(r[k] is None for k in ("usage_tokens", "usage_input", "usage_input_total",
+                                      "usage_output", "usage_cache_read", "usage_cache_write"))
+
+
+def test_mort_ou_conclu_le_serveur_lit_les_memes_postes():
+    """Une seule façon de lire un coût : les postes d'usage d'un déroulé mort sont ceux
+    d'un déroulé conclu, clé pour clé."""
+    mort = conclusion.resultat_partiel(_lever(), "m")
+    conclu = conclusion.resultat_declare(
+        agent_runtime.AgentResult(reply="fini", stopped="end_turn", usage={},
+                                  couverture={"tours": 1}), "m")
+    assert {k for k in mort if k.startswith("usage_")} == {k for k in conclu if k.startswith("usage_")}

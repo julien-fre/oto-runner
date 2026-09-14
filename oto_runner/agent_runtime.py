@@ -33,6 +33,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
+from .comptage import Compteur
 from .llm_types import ToolCall, Turn  # noqa: F401 — le contrat du provider
 
 # ── Le plafond de la sortie d'outil SERVIE AU MODÈLE, en caractères ─────────
@@ -61,23 +62,6 @@ DEFAULT_MAX_STEPS = 24
 HARD_MAX_STEPS = 64
 MAX_HISTORY_MESSAGES = 60   # tours provider transportés au modèle (le fil complet
                             # reste au backend — ici on borne le COÛT d'un tour)
-# Les postes d'usage cumulés sur un run. Les deux derniers ne sont pas du
-# décor : `input_tokens` ne compte QUE le reste non caché, donc sans eux le
-# volume d'entrée réel d'un run caché est illisible.
-USAGE_KEYS = ("input_tokens", "output_tokens",
-              "cache_creation_input_tokens", "cache_read_input_tokens")
-
-
-def _factures(usage: dict) -> int:
-    """Les jetons FACTURÉS d'un déroulé — ce qu'une borne de coût doit compter.
-
-    Exclut `cache_read_input_tokens` : lus en cache, ils coûtent une fraction du
-    tarif d'entrée. Les inclure ferait dépasser la borne à un passage BIEN caché,
-    c'est-à-dire précisément celui qu'on ne veut pas couper.
-    """
-    return (int(usage.get("input_tokens") or 0)
-            + int(usage.get("output_tokens") or 0)
-            + int(usage.get("cache_creation_input_tokens") or 0))
 
 
 class ToolTransport(Protocol):
@@ -176,6 +160,8 @@ class AgentResult:
     # flottant ne se date pas après coup. Les autres providers laissent None.
     defaut: Optional[dict] = None        # le défaut de forme qui a ARRÊTÉ la
     # boucle (cf. `Turn.defaut`) — `None` quand elle s'est arrêtée autrement.
+    couverture: Optional[dict] = None    # ce qui fonde `usage` (cf. `comptage`) :
+    # les tours, et par poste combien l'ont déclaré et quoi. `None` = non compté.
 
 
 # `on_turn(role, content_neutre, provider_raw)` : le point d'ancrage du FIL (R1).
@@ -305,15 +291,19 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
     quand ça casse, et le changer ferait passer un échec pour un résultat auprès
     de tous ses appelants.
     """
-    compte: dict = {"usage": dict.fromkeys(USAGE_KEYS, 0), "pas": 0, "servi": None}
+    compte: dict = {"compteur": Compteur(), "pas": 0, "servi": None}
     try:
         return _run(spec, transport, provider, compte, prompt=prompt,
                     history=history, on_turn=on_turn, api_key=api_key,
                     on_event=on_event)
     except BaseException as e:
-        e.usage_partiel = dict(compte["usage"])   # type: ignore[attr-defined]
-        e.modele_partiel = compte["servi"]        # type: ignore[attr-defined]
-        e.pas_partiels = compte["pas"]            # type: ignore[attr-defined]
+        # L'usage PAR POSTE tel que le comptage le rend (`None` = non déclaré sur au
+        # moins un tour) et la couverture qui le fonde : un déroulé mort se lit comme
+        # un déroulé conclu, sans zéro fabriqué (cf. `comptage`).
+        e.usage_partiel = compte["compteur"].usage()               # type: ignore[attr-defined]
+        e.couverture_partielle = compte["compteur"].couverture()   # type: ignore[attr-defined]
+        e.modele_partiel = compte["servi"]                         # type: ignore[attr-defined]
+        e.pas_partiels = compte["pas"]                             # type: ignore[attr-defined]
         raise
 
 
@@ -362,10 +352,9 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         note("descriptions_outils", outils=list(servies),
              coupees=[d["outil"] for d in servies if d["servie"] < d["longueur"]])
     steps: list[AgentStep] = []
-    # ⚠️ L'usage vient de l'APPELANT et se remplit en place : c'est ce qui le rend
-    # lisible quand une exception traverse la boucle (cf. `run`). Le reste du
-    # corps est inchangé, à l'octet.
-    usage = compte["usage"]
+    # ⚠️ Le compteur vient de l'APPELANT et se remplit en place : c'est ce qui le
+    # rend lisible quand une exception traverse la boucle (cf. `run`).
+    compteur = compte["compteur"]
     stopped = "end_turn"
     reply = ""
     servi: Optional[str] = None
@@ -384,8 +373,7 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
                                  on_event=on_event)
         duree_tour_ms = int((time.monotonic() - debut_tour) * 1000)
         n_tours += 1
-        for k in USAGE_KEYS:
-            usage[k] = usage.get(k, 0) + int(turn.usage.get(k) or 0)
+        non_mesures = compteur.ajouter(turn.usage)
         # Le DERNIER tour fait foi : un fournisseur qui bascule d'alias en cours
         # de déroulé a servi les deux, et c'est le second qu'on retrouvera.
         servi = turn.model or servi
@@ -429,7 +417,18 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         # coûtent une fraction et gonfleraient le compteur d'un facteur trois sur
         # un déroulé bien caché — une borne qui les compterait couperait des
         # passages économes en croyant les protéger.
-        if spec.max_tokens is not None and _factures(usage) >= spec.max_tokens:
+        #
+        # ⚠️ Une borne DEMANDÉE ne se suit que sur des tours mesurés. Un tour qui ne
+        # déclare pas son entrée ou sa sortie l'aveugle : on s'arrête AVANT le tour
+        # suivant, en le nommant, plutôt que de promettre un plafond qu'on ne mesure
+        # plus (arbitrage du 13/09/2026). Des caches inconnus seuls ne l'aveuglent
+        # pas. Sans borne demandée, le déroulé continue et la couverture dit le manque.
+        if spec.max_tokens is not None and non_mesures:
+            note("borne_non_suivie", borne="max_tokens", max_tokens=spec.max_tokens,
+                 tour=n_tours, manque=non_mesures, jetons_bornes=compteur.borne)
+            stopped = "max_tokens_non_mesurable"
+            break
+        if spec.max_tokens is not None and compteur.borne >= spec.max_tokens:
             stopped = "max_tokens"
             break
 
@@ -486,15 +485,16 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
 
     if not reply and stopped == "end_turn":
         stopped = "no_reply"
-    note("fin", stopped=stopped, reponse=reply, usage=dict(usage), pas=len(steps),
-         modele=servi)
+    note("fin", stopped=stopped, reponse=reply, usage=compteur.usage(),
+         couverture=compteur.couverture(), pas=len(steps), modele=servi)
     # ⚠️ L'estampille remonte du tour, pas de la configuration : c'est ce que le
     # fournisseur a SERVI. Elle était déclarée sur `AgentResult` depuis l'origine,
     # lue par le worker et comptée par le bilan — mais AUCUN transport ne la
     # posait. Trois consommateurs, zéro producteur : le champ valait `None` sur
     # 100 % des jobs, et « quelles lignes viennent de quel modèle » n'avait plus
     # de réponse (constaté au vol le 02/09, sur des passages réels).
-    return AgentResult(reply=reply, steps=steps, stopped=stopped, usage=usage,
+    return AgentResult(reply=reply, steps=steps, stopped=stopped, usage=compteur.usage(),
+                       couverture=compteur.couverture(),
                        messages=messages, model=servi, defaut=defaut)
 
 

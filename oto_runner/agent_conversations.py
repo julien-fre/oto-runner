@@ -89,6 +89,7 @@ from typing import Optional
 import requests
 
 from .agent_runtime import AgentResult, AgentStep
+from .comptage import Compteur
 from .deadline import DeadlineExceeded, post_with_deadline  # noqa: F401 — DeadlineExceeded
 # fait partie du contrat d'erreur de run_once (remonte au job, jamais rejouée ici).
 
@@ -447,13 +448,15 @@ def _cumuler(cumul: Optional[AgentResult], passe: AgentResult) -> AgentResult:
     le relevé des pas doit montrer l'appel rendu autant que ce qui l'a suivi."""
     if cumul is None:
         return passe
+    # Les tours, déclarants et sommes s'ajoutent : un poste qu'une passe ne déclare
+    # pas reste inconnu pour le travail, sans effacer ce que l'autre a déclaré.
+    compte = Compteur.depuis(cumul.couverture).fusion(Compteur.depuis(passe.couverture))
     textes = [t for t in (cumul.reply, passe.reply) if t]
     return AgentResult(
         reply="\n".join(textes),
         steps=list(cumul.steps) + list(passe.steps),
         stopped=passe.stopped,
-        usage={c: int(cumul.usage.get(c) or 0) + int(passe.usage.get(c) or 0)
-               for c in ("input_tokens", "output_tokens")},
+        usage=compte.usage(), couverture=compte.couverture(),
         raw_outputs=passe.raw_outputs,
         model=passe.model or cumul.model)
 
@@ -501,14 +504,22 @@ def _parse(d: dict, tools=(), demande: Optional[str] = None) -> AgentResult:
             steps.append(AgentStep(tool=_nom_outil(e.get("name") or "?", tools),
                                    ok=False,
                                    duration_ms=0, error="function.call non exécuté"))
+    # Un poste n'est posé que s'il est DÉCLARÉ (cf. `comptage`). Contrat Mistral
+    # Conversations, lu le 13/09/2026 : aucun champ d'usage n'est obligatoire et aucun
+    # ne dit ce que vaut son absence — absent, il reste inconnu. Aucun poste de cache
+    # n'y est rendu : `prompt_tokens` est l'entrée TOTALE déclarée, et le non-caché
+    # reste inconnu. `connector_tokens`/`connectors` (outils exécutés côté Mistral) ne
+    # sont pas comptés : la couverture de ce chemin est partielle, et elle le dit.
     u = d.get("usage") or {}
-    usage = {"input_tokens": int(u.get("prompt_tokens") or 0),
-             "output_tokens": int(u.get("completion_tokens") or 0)}
+    compte = Compteur()
+    compte.ajouter({"input_total_tokens": u.get("prompt_tokens"),
+                    "output_tokens": u.get("completion_tokens")})
     # La docstring de ce module PROMETTAIT déjà cette estampille — « le bilan
     # porte la version CONCRÈTE que l'alias résolvait au moment de l'appel » —
     # sans que personne ne la pose. Une promesse tenue par un commentaire est
     # exactement ce qui empêche de chercher le défaut.
     return AgentResult(reply="\n".join(textes).strip(), steps=steps,
-                       stopped="end_turn", usage=usage,
+                       stopped="end_turn", usage=compte.usage(),
+                       couverture=compte.couverture(),
                        raw_outputs=d.get("outputs"),
                        model=d.get("model") or demande or model())

@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Optional
 
+from .comptage import POSTES
 from .llm_types import LlmUnavailable, ToolCall, Turn
 
 # Sonnet par défaut — divergence ASSUMÉE avec le prototype (Opus) : un run hébergé
@@ -274,21 +275,15 @@ def complete(*, system: str, messages: list, tools: list[dict],
     resp = client.messages.create(**kwargs)
 
     stop = getattr(resp, "stop_reason", "") or "end_turn"
-    usage = {}
-    try:
-        u = resp.usage
-        # ⚠️ `input_tokens` n'est QUE le reste NON caché — le volume d'entrée
-        # réel vaut input + cache_creation + cache_read. Un run qui cache bien
-        # affiche un `input_tokens` minuscule : c'est la somme qui se lit, pas
-        # le champ seul. 0 quand l'API ne rend pas le champ (pas de cache).
-        usage = {"input_tokens": u.input_tokens,
-                 "output_tokens": u.output_tokens,
-                 "cache_creation_input_tokens":
-                     int(getattr(u, "cache_creation_input_tokens", 0) or 0),
-                 "cache_read_input_tokens":
-                     int(getattr(u, "cache_read_input_tokens", 0) or 0)}
-    except Exception:  # noqa: BLE001 — la télémétrie n'est jamais bloquante
-        pass
+    # ⚠️ `input_tokens` n'est QUE le reste NON caché — le volume d'entrée réel vaut
+    # input + cache_creation + cache_read. Un run qui cache bien affiche un
+    # `input_tokens` minuscule : c'est la somme qui se lit, pas le champ seul.
+    # Un poste n'est posé que s'il est DÉCLARÉ (cf. `comptage`). Contrat Anthropic,
+    # lu le 13/09/2026 : les postes de cache sont toujours rendus et NULLABLES ;
+    # « 0 » veut dire pas de cache, `null` n'a aucun sens documenté — il reste inconnu.
+    u = getattr(resp, "usage", None)
+    usage = {poste: int(valeur) for poste in POSTES
+             if (valeur := getattr(u, poste, None)) is not None}
 
     # La version SERVIE si l'API la rend, à défaut celle qu'on a demandée : une
     # estampille approchée vaut infiniment mieux qu'un `null`, qui ne se distingue

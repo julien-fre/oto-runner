@@ -461,9 +461,11 @@ def _traiter(backend: Backend, job: dict, provider,
          modele_servi=res.model)
     conclusion.rendre(file, job["id"], ok=not echec, error=echec, run_id=run_id,
                       result=resultat, note=note)
-    logger.info("job %s : %s (%s · %d appels · %d jetons (+ %d lus en cache) · "
+    logger.info("job %s : %s (%s · %d appels · jetons : %s (+ %s lus en cache) · "
                 "modèle servi %s%s)", job["id"], outcome, res.stopped, len(res.steps),
-                jetons, lus_en_cache, res.model or "non rapporté",
+                "inconnus" if jetons is None else jetons,
+                "inconnus" if lus_en_cache is None else lus_en_cache,
+                res.model or "non rapporté",
                 f", demandé {demande}" if res.model and res.model != demande else "")
 
 
