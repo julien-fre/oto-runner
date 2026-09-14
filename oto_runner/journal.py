@@ -14,7 +14,7 @@ travail qui plante laisse sa trace jusqu'au plantage. Aucun texte n'y est
 tronqué : la sortie d'outil journalisée est celle que le transport a rendue, pas
 celle que le modèle a lue.
 
-Emplacement : `<OTO_RUNNER_PASSAGES_DIR ou passages>/<flotte>/<job_id>.jsonl` — un
+Emplacement : `<OTO_RUNNER_PASSAGES_DIR ou passages>/<flotte>/<job_id>.<tentative>.jsonl` — un
 répertoire par flotte, nommé d'après le tag `fleet` du travail, c'est-à-dire le
 nom de la déclaration (`<flotte>.yaml`), celui qui nomme déjà `<flotte>.bilan.json`
 et `<flotte>.log`. Un travail sans flotte va dans `hors-flotte`. ⚠️ Le journal est
@@ -63,11 +63,19 @@ def nom_de_flotte(label) -> str:
     return propre or _HORS_FLOTTE
 
 
-def chemin(label, job_id) -> str:
-    """Où se trouve (ou se trouvera) le journal du travail `job_id` de la flotte
-    `label`. La même fonction sert au worker, qui écrit, et à l'ordonnanceur, qui
-    pointe : un seul endroit décide de la convention."""
-    return os.path.join(dossier(), nom_de_flotte(label), f"{job_id}.jsonl")
+def chemin(label, job_id, tentative=None) -> str:
+    """Où se trouve (ou se trouvera) le journal de la tentative `tentative` du
+    travail `job_id` de la flotte `label`. La même fonction sert au worker, qui
+    écrit, et à l'ordonnanceur, qui pointe : un seul endroit décide de la convention.
+
+    ⚠️ Un fichier PAR TENTATIVE (oto#196). Une reprise garde le même identifiant de
+    travail : nommé par le seul `job_id`, le journal de la seconde tentative
+    s'ajoutait à celui de la première sur la même machine, et rien ne disait où
+    l'une finissait et où l'autre commençait. `tentative` est le compteur que le
+    serveur rend à la réservation (`attempts`). Sans tentative — le mode direct,
+    qui ne reprend jamais un travail — le nom reste `<job_id>.jsonl`."""
+    nom = f"{job_id}.jsonl" if tentative is None else f"{job_id}.{int(tentative)}.jsonl"
+    return os.path.join(dossier(), nom_de_flotte(label), nom)
 
 
 def preparer() -> str:
@@ -158,9 +166,10 @@ class Journal:
 
 
 def du_travail(job: dict) -> Journal:
-    """Le journal d'un travail réservé — nommé par sa flotte et son identifiant."""
+    """Le journal de la tentative réservée — nommé par sa flotte, son identifiant
+    et le compteur de tentatives rendu par la réservation."""
     p = job.get("payload") or {}
-    return Journal(chemin(p.get("fleet"), job.get("id")))
+    return Journal(chemin(p.get("fleet"), job.get("id"), job.get("attempts")))
 
 
 def debut(journal: Journal, job: dict, provider) -> None:

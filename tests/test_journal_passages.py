@@ -238,6 +238,30 @@ def test_un_travail_sans_flotte_va_dans_hors_flotte_et_un_tag_douteux_ne_fait_pa
     assert journal.nom_de_flotte("../banc v151/large") == "banc_v151_large"
 
 
+# ── Un fichier par tentative (oto#196) ───────────────────────────────────────
+
+def test_deux_tentatives_d_un_meme_travail_ont_deux_journaux_distincts(monkeypatch, tmp_path):
+    """Une reprise garde l'identifiant du travail : nommée par lui seul, la seconde
+    tentative s'ajoutait au journal de la première. Le compteur rendu par la
+    réservation (`attempts`) les sépare, et la première reste intacte."""
+    monkeypatch.setenv("OTO_RUNNER_PASSAGES_DIR", str(tmp_path))
+    premiere = journal.du_travail({"id": 7, "attempts": 1, "payload": {"fleet": "f"}})
+    premiere.ecrire("debut"); premiere.ecrire("erreur", message="bail perdu")
+    seconde = journal.du_travail({"id": 7, "attempts": 2, "payload": {"fleet": "f"}})
+    seconde.ecrire("debut"); seconde.ecrire("resultat", outcome="done")
+
+    assert premiere.chemin.endswith(os.path.join("f", "7.1.jsonl"))
+    assert seconde.chemin.endswith(os.path.join("f", "7.2.jsonl"))
+    assert journal.relire(premiere.chemin) == (2, "erreur"), "la première tentative n'a pas bougé"
+    assert journal.relire(seconde.chemin) == (2, "resultat")
+
+
+def test_sans_tentative_le_nom_reste_celui_du_mode_direct():
+    """Le mode direct ne reprend jamais un travail : pas de compteur, pas de suffixe."""
+    assert journal.chemin("f", 3).endswith(os.path.join("f", "3.jsonl"))
+    assert journal.chemin("f", 3, 1).endswith(os.path.join("f", "3.1.jsonl"))
+
+
 # ── Relire avant d'annoncer ──────────────────────────────────────────────────
 
 def test_relire_leve_en_nommant_le_chemin_quand_le_journal_n_est_pas_la(tmp_path):

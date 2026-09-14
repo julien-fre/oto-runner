@@ -316,7 +316,7 @@ def run_fleet(spec: FleetSpec, backend: Backend, *,
                 # Le journal JSONL du travail — RELU avant d'être nommé, jamais
                 # supposé (cf. `journal.relire`). Absent d'ici : compté, dit en
                 # erreur, et `null` pour le bilan.
-                chemin = journal.chemin(spec.name, jid)
+                chemin = journal.chemin(spec.name, jid, job.get("attempts"))
                 niveau = logging.INFO if st == "done" else logging.WARNING
                 try:
                     trace = f"journal complet : {journal.relu(chemin)}"
@@ -454,7 +454,7 @@ def run_fleet(spec: FleetSpec, backend: Backend, *,
                                            sorted(bilan.arrets.items())))
                 if bilan.journaux_absents:
                     logger.error("⚠️ %d travail/travaux sur %d SANS JOURNAL RELU "
-                                 "depuis cet ordonnanceur (%s/<flotte>/<job>.jsonl) : "
+                                 "depuis cet ordonnanceur (%s/<flotte>/<job>.<tentative>.jsonl) : "
                                  "leur déroulé ne se relit que là où leur worker "
                                  "tourne — s'il journalise.",
                                  bilan.journaux_absents, bilan.done + bilan.failed,

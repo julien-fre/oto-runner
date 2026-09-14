@@ -142,7 +142,7 @@ aucune lecture des jobs ; et le fournisseur OpenAI-compatible est sans état.
 
 Le worker écrit donc, pour chaque travail, un **JSONL** — un événement par
 ligne, horodaté, **écrit à chaque événement** (un travail qui plante laisse sa
-trace jusqu'au plantage) — dans `<OTO_RUNNER_PASSAGES_DIR>/<flotte>/<job_id>.jsonl`
+trace jusqu'au plantage) — dans `<OTO_RUNNER_PASSAGES_DIR>/<flotte>/<job_id>.<tentative>.jsonl` (un fichier par tentative : une reprise ne s'ajoute plus au journal de la précédente)
 (`passages/` par défaut, relatif au répertoire courant du worker ; `<flotte>` est
 le nom de la déclaration, celui de `<flotte>.bilan.json` et `<flotte>.log` ;
 `hors-flotte` pour un travail sans flotte). Rien n'y est tronqué :
@@ -291,7 +291,7 @@ mêmes outils, même boucle, même journal — se joue de deux façons :
 | la file de jobs | `POST /api/me/runner/jobs` : enfiler, réserver, lier, battre, conclure | **aucune** — jamais un appel à cette route |
 | le jeton | le jeton **délégué** remis avec chaque job (l'agent agit pour le demandeur) | `OTO_TOKEN` du poste, qui tient lieu de jeton délégué |
 | le modèle | celui que l'agent DÉCLARE, à défaut celui de l'env des **workers** | idem, sur l'env de **ce processus** (`OTO_RUNNER_MODEL`) |
-| le journal JSONL | `passages/<flotte>/<job_id>.jsonl`, **là où le worker tourne** | `passages/<flotte>/direct-<horodatage>-<n>.jsonl`, ici |
+| le journal JSONL | `passages/<flotte>/<job_id>.<tentative>.jsonl`, **là où le worker tourne** | `passages/<flotte>/direct-<horodatage>-<n>.jsonl`, ici |
 | le bilan | `<flotte>.bilan.json` | `<flotte>.direct-<horodatage>.bilan.json` — même forme |
 
 ⚠️ **`workers` ne crée pas de workers — c'est une profondeur de file, pas un

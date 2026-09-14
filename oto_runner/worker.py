@@ -586,7 +586,7 @@ def main() -> None:
     nom_modele, resolu = _modele_courant(provider), None
     resolu = getattr(provider, "modele_resolu", lambda _n: None)(nom_modele)
     logger.info("worker armé — file de %s · provider %s · modèle %s%s · clé %s · "
-                "journaux par travail dans %s/<flotte>/<job>.jsonl",
+                "journaux par tentative dans %s/<flotte>/<job>.<tentative>.jsonl",
                 backend.base, provider.__name__.rsplit('_', 1)[-1], nom_modele,
                 f" (= {resolu})" if resolu and resolu != nom_modele else "",
                 _dire_la_cle(depot), passages)
