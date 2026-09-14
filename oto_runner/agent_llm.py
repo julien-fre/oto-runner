@@ -41,7 +41,7 @@ def model() -> str:
     return os.environ.get("OTO_RUNNER_MODEL") or DEFAULT_MODEL
 
 
-def effort() -> str:
+def effort_hote() -> str:
     return os.environ.get("OTO_RUNNER_EFFORT") or DEFAULT_EFFORT
 
 
@@ -224,6 +224,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
              api_key: Optional[str] = None,
              temperature: Optional[float] = None,
              modele: Optional[str] = None,
+             effort: Optional[str] = None,
              on_event: Optional[Callable[[str, dict], None]] = None) -> Turn:
     """UN tour de modèle — synchrone : le worker est un process dédié, pas un
     serveur mono-loop, il a le droit d'attendre.
@@ -261,14 +262,16 @@ def complete(*, system: str, messages: list, tools: list[dict],
         raise LlmUnavailable("le paquet `anthropic` n'est pas installé")
     client = anthropic.Anthropic(api_key=api_key or resolve_key())
     nom = modele or model()
+    effort_retenu = effort or effort_hote()
     kwargs: dict = {
         "model": nom,
         "max_tokens": max_tokens(),
         "system": systeme_cache(system),
         "messages": fil_cache(messages),
-        # `effort` est ÉPINGLÉ par worker (env), et c'est aussi ce que le cache
-        # demande : le faire varier d'un tour à l'autre invaliderait le fil.
-        "output_config": {"effort": effort()},
+        # L'effort du TRAVAIL, à défaut celui du worker (env). Il est fixe sur tout
+        # le déroulé — c'est ce que le cache demande : le faire varier d'un tour à
+        # l'autre invaliderait le fil.
+        "output_config": {"effort": effort_retenu},
     }
     if tools:
         kwargs["tools"] = outils_cache(tools)
@@ -293,7 +296,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
     raw = [_block_to_dict(b) for b in getattr(resp, "content", []) or []]
     if stop == "refusal":
         return Turn(text="", tool_calls=(), stop_reason="refusal",
-                    raw_content=raw, usage=usage, model=servi)
+                    raw_content=raw, usage=usage, model=servi, effort=effort_retenu)
 
     texts: list[str] = []
     calls: list[ToolCall] = []
@@ -309,4 +312,4 @@ def complete(*, system: str, messages: list, tools: list[dict],
                 arguments=raw_args if isinstance(raw_args, dict) else {}))
     return Turn(text="\n".join(t for t in texts if t.strip()).strip(),
                 tool_calls=tuple(calls), stop_reason=stop,
-                raw_content=raw, usage=usage, model=servi)
+                raw_content=raw, usage=usage, model=servi, effort=effort_retenu)

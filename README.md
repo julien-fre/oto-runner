@@ -72,8 +72,10 @@ OTO_RUNNER_MODEL=claude-sonnet-5     # le DÉFAUT du worker — un agent qui dé
 OTO_RUNNER_ARMED=1                   # cf. ci-dessus
 OTO_RUNNER_PASSAGES_DIR=passages     # où le worker écrit le JOURNAL de chaque travail
 OTO_RUNNER_RELANCES_MAX=0            # relances d'un fil qui rend un appel au client
-OTO_RUNNER_EFFORT=…                  # profondeur de raisonnement — Anthropic `output_config.effort`,
-                                     # OpenAI-compatible `reasoning_effort` ; ABSENT = rien n'est envoyé
+OTO_RUNNER_EFFORT=…                  # profondeur de raisonnement, défaut de l'HÔTE — Anthropic `output_config.effort`,
+                                     # OpenAI-compatible `reasoning_effort` ; ABSENT = rien n'est envoyé. L'effort
+                                     # porté par le TRAVAIL (catalogue : mistral-medium-2604 → high) le remplace ;
+                                     # à `temperature: 0` avec un effort, `top_p: 1` part aussi (exigé par Mistral)
 OTO_RUNNER_MAX_TOKENS=8192           # plafond de COMPLÉTION d'un tour (les deux providers)
 OTO_RUNNER_MAX_TOOL_OUTPUT=120000    # plafond, en CARACTÈRES, d'une sortie d'outil servie au modèle
 OTO_RUNNER_PARALLEL_TOOLS=1          # 1 (défaut) = le modèle groupe ses appels d'outils dans un

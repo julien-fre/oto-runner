@@ -41,6 +41,10 @@ class Turn:
     # passage, ou celle de l'hôte à défaut, ou rien. Portée par le tour pour que
     # le journal la LISE au lieu de la déduire d'un `.env` relu après coup.
     temperature: Optional[float] = None
+    # L'effort de réflexion EFFECTIVEMENT envoyé sur ce tour — celui du travail, ou
+    # celui de l'hôte à défaut, ou rien. Porté par le tour, comme la température,
+    # pour que le journal le LISE au lieu de le déduire d'un `.env`.
+    effort: Optional[str] = None
     # Un défaut de FORME constaté dans la réponse du fournisseur — aujourd'hui un
     # seul : un appel d'outil rendu en texte au lieu d'un `tool_calls`
     # (`{"forme": "reference+texte_json", "outil": <nom>}`). Décrit, jamais

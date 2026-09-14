@@ -118,6 +118,10 @@ def _spec_du_job(job: dict) -> AgentSpec:
         # un nom inconnu de son fournisseur remonte alors comme l'erreur du
         # fournisseur, qui nomme le modèle — un diagnostic, pas une devinette.
         model=(str(p["model"]).strip() or None) if p.get("model") else None,
+        # ⚠️ L'effort de réflexion porté par le TRAVAIL (oto-backend, 14/09/2026) : une
+        # propriété du modèle catalogué, reprise sur un `continue`. Absent = rien de
+        # plus qu'avant. Une chaîne vide vaut une absence, comme pour le modèle.
+        effort=(str(p["effort"]).strip() or None) if p.get("effort") else None,
         label=f"job:{job.get('id')}")
 
 
@@ -231,6 +235,25 @@ class FamilleEtrangere(RuntimeError):
     """
 
 
+class EffortNonServi(RuntimeError):
+    """Ce travail porte un effort de réflexion que ce provider ne sait pas envoyer.
+
+    ⚠️ La voie Conversations (`ONE_SHOT`) n'a pas de paramètre d'effort. L'ignorer
+    ferait tourner le modèle au défaut du fournisseur pendant que le passage affiche
+    l'effort demandé — un réglage offert qui ne fait rien. Refusé AVANT session ou
+    run, comme une famille étrangère : rien n'est dépensé."""
+
+
+def _exiger_effort_servi(p: dict, provider) -> None:
+    effort = str(p.get("effort") or "").strip()
+    if effort and getattr(provider, "ONE_SHOT", False):
+        raise EffortNonServi(
+            f"ce travail demande l'effort `{effort}` et ce worker sert la voie "
+            "Conversations, qui ne l'envoie pas. Il n'est pas exécuté : le servir sans "
+            "effort ferait tourner le modèle au défaut du fournisseur. Sers-le par un "
+            "worker Chat Completions (OTO_RUNNER_OPENAI_BASE).")
+
+
 def _exiger_ma_famille(p: dict, provider) -> None:
     """Lève `FamilleEtrangere` si le travail demande une famille qui n'est pas
     celle de ce worker. Sans famille déclarée : rien à vérifier — le travail
@@ -322,6 +345,8 @@ def _traiter(backend: Backend, job: dict, provider,
     # session MCP ou un run : un travail qu'on ne peut pas exécuter ne doit rien
     # coûter, et surtout ne rien laisser derrière lui.
     _exiger_ma_famille(p, provider)
+    # Un effort que ce provider n'enverrait pas : refusé ici, même raison.
+    _exiger_effort_servi(p, provider)
     # Un worker sans clé propre ne part pas sans celle de l'org — AVANT session ou
     # run, pour la même raison que la famille : rien ne doit être dépensé.
     _exiger_cle_deposee(job)

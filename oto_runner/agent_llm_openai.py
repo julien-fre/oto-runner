@@ -187,10 +187,11 @@ def temperature_hote() -> Optional[float]:
             f"OTO_RUNNER_TEMPERATURE={v!r} : un nombre est attendu (par ex. 0)")
 
 
-def effort() -> Optional[str]:
-    """`OTO_RUNNER_EFFORT`, envoyé en `reasoning_effort` (le nom OpenAI-compatible)
-    quand il est posé ; absent = on n'envoie RIEN et le fournisseur applique son
-    défaut. ⚠️ Scaleway active le raisonnement par défaut et le FACTURE : ne pas
+def effort_hote() -> Optional[str]:
+    """`OTO_RUNNER_EFFORT` — le défaut de CET hôte, quand le travail n'en porte aucun ;
+    envoyé en `reasoning_effort` (le nom OpenAI-compatible). Absent aussi = on
+    n'envoie RIEN et le fournisseur applique son défaut. Renommé comme
+    `temperature_hote` le 14/09/2026 : l'effort du TRAVAIL prime désormais sur lui. ⚠️ Scaleway active le raisonnement par défaut et le FACTURE : ne pas
     pouvoir le régler coûte. Aucune valeur par défaut ici — la variable n'était lue
     que côté Anthropic (`output_config.effort`), et personne ne le savait."""
     return os.environ.get("OTO_RUNNER_EFFORT", "").strip() or None
@@ -321,6 +322,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
              api_key: Optional[str] = None,
              temperature: Optional[float] = None,
              modele: Optional[str] = None,
+             effort: Optional[str] = None,
              on_event: Optional[Callable[[str, dict], None]] = None) -> Turn:
     """UN tour de modèle — synchrone, le worker a le droit d'attendre.
 
@@ -345,13 +347,23 @@ def complete(*, system: str, messages: list, tools: list[dict],
     }
     if tools:
         corps["tools"] = tools
-    if effort():
-        corps["reasoning_effort"] = effort()
+    # Le travail d'abord, l'hôte à défaut, rien sinon — le même ordre que la
+    # température. Calculé UNE fois : le tour le porte, le journal le lit.
+    effort_retenu = effort or effort_hote()
+    if effort_retenu:
+        corps["reasoning_effort"] = effort_retenu
     # Le passage d'abord, l'hôte à défaut, rien sinon. Le calcul est fait UNE
     # fois : appeler deux fois relisait l'environnement entre le test et l'usage.
     retenue = temperature if temperature is not None else temperature_hote()
     if retenue is not None:
         corps["temperature"] = retenue
+    if effort_retenu and retenue == 0:
+        # ⚠️ Mistral REFUSE un effort en échantillonnage glouton sans `top_p: 1`.
+        # Mesuré le 14/09/2026 sur mistral-medium-2604 : `reasoning_effort: high` et
+        # `temperature: 0` → 400 `invalid_request_greedy_sampling` (« top_p must be 1
+        # when using greedy sampling ») ; 200 avec `top_p: 1`. Sans effort, ou hors
+        # T = 0, rien n'est ajouté : ces requêtes restent inchangées à l'octet.
+        corps["top_p"] = 1
     if not parallel_tools():
         # ⚠️ Le serveur peut TOUT DE MÊME rendre plusieurs appels dans un tour :
         # la boucle les exécutera comme d'habitude. Aucune garde ici — ce serait
@@ -380,7 +392,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
 
     if fin == "content_filter":
         return Turn(text="", tool_calls=(), stop_reason="refusal",
-                    raw_content=msg, usage=usage, model=servi, temperature=retenue)
+                    raw_content=msg, usage=usage, model=servi, temperature=retenue, effort=effort_retenu)
 
     calls = []
     for tc in (msg.get("tool_calls") or []):
@@ -421,7 +433,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
                 tool_calls=tuple(calls),
                 stop_reason=("fin_anormale" if anormale
                              else "appel_mal_encode" if defaut else "end_turn"),
-                raw_content=msg, usage=usage, model=servi, temperature=retenue,
+                raw_content=msg, usage=usage, model=servi, temperature=retenue, effort=effort_retenu,
                 defaut=defaut)
 
 

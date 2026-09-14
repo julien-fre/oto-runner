@@ -102,6 +102,10 @@ class AgentSpec:
     # de 11 à 18 sur 18 — un écart qui avale entièrement celui qu'on cherchait
     # à mesurer entre deux versions du texte.
     temperature: Optional[float] = None
+    # L'effort de réflexion porté par le TRAVAIL — une propriété du modèle catalogué
+    # côté backend (14/09/2026 : `mistral-medium-2604` part en `high`). `None` = rien
+    # de plus qu'avant : l'hôte (`OTO_RUNNER_EFFORT`), puis le fournisseur.
+    effort: Optional[str] = None
     # Le MODÈLE de ce déroulé, déclaré par l'agent qui l'a demandé (oto-backend
     # #939 : le travail porte `payload.model`). `None` = celui du worker, pris
     # dans son environnement — le comportement d'avant, et celui de tout agent
@@ -369,6 +373,7 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         turn = provider.complete(system=spec.system, messages=messages,
                                  tools=schemas, api_key=api_key,
                                  temperature=spec.temperature,
+                                 effort=spec.effort,
                                  modele=spec.model,
                                  on_event=on_event)
         duree_tour_ms = int((time.monotonic() - debut_tour) * 1000)
@@ -382,7 +387,7 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
              appels=[{"id": c.id, "nom": c.name, "arguments": c.arguments}
                      for c in turn.tool_calls],
              usage=dict(turn.usage or {}), modele=turn.model,
-             temperature=turn.temperature,
+             temperature=turn.temperature, effort=turn.effort,
              duree_ms=duree_tour_ms, brut=turn.raw_content)
 
         # ⚠️ Un appel d'outil rendu en TEXTE n'est pas une conclusion (job 17275) :
