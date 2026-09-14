@@ -77,6 +77,12 @@ OTO_RUNNER_EFFORT=…                  # profondeur de raisonnement, défaut de 
                                      # porté par le TRAVAIL (catalogue : mistral-medium-2604 → high) le remplace ;
                                      # à `temperature: 0` avec un effort, `top_p: 1` part aussi (exigé par Mistral)
 OTO_RUNNER_MAX_TOKENS=8192           # plafond de COMPLÉTION d'un tour (les deux providers)
+OTO_RUNNER_MAX_TOKENS_EFFORT=16000   # plafond de COMPLÉTION d'un tour qui porte l'effort du TRAVAIL — voie Chat
+                                     # Completions seulement (le raisonnement partage la complétion). OBLIGATOIRE dès
+                                     # qu'un travail porte un effort : ABSENT = le tour LÈVE, sans repli. Un effort
+                                     # d'hôte garde OTO_RUNNER_MAX_TOKENS. Ignoré par le provider anthropic
+                                     # (oto-runner-anthropic@1 : chemin inchangé). À retirer quand le catalogue
+                                     # du backend portera une limite par modèle.
 OTO_RUNNER_MAX_TOOL_OUTPUT=120000    # plafond, en CARACTÈRES, d'une sortie d'outil servie au modèle
 OTO_RUNNER_PARALLEL_TOOLS=1          # 1 (défaut) = le modèle groupe ses appels d'outils dans un
                                      # tour ; 0 = UN SEUL par tour (`parallel_tool_calls: false`)

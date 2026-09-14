@@ -160,6 +160,39 @@ def max_tokens() -> int:
     return int(brut)
 
 
+_ENV_MAX_TOKENS_EFFORT = "OTO_RUNNER_MAX_TOKENS_EFFORT"
+
+
+def max_tokens_effort() -> int:
+    """`OTO_RUNNER_MAX_TOKENS_EFFORT` — le plafond de COMPLÉTION d'un tour qui porte
+    l'effort de réflexion du TRAVAIL (14/09/2026).
+
+    ⚠️ Les jetons de raisonnement se comptent dans la complétion et partagent ce
+    plafond avec la réponse. Mesuré au banc d'Audiens le 14/09/2026, `max_tokens` à
+    16 000 : `mistral-medium-2604` en `high` monte à 6 964 jetons de complétion par
+    tour (p90 3 968), là où `mistral-large-2512` sans effort plafonne à 1 635 — 85 %
+    de 8 192 sur des tours de décision, avant même l'écriture d'une passe.
+
+    Aucune valeur par défaut : un effort de travail servi sans ce plafond LÈVE, plutôt
+    que de retomber en silence sur `OTO_RUNNER_MAX_TOKENS`. Sans effort de travail,
+    rien ne change — ni `max_tokens()`, ni la requête. Un effort d'HÔTE
+    (`OTO_RUNNER_EFFORT`) garde le plafond ordinaire : cet hôte règle les deux.
+
+    ⚠️ Surcharge d'hôte, datée : le jour où le catalogue du backend portera une limite
+    par modèle (comme il porte déjà l'effort), elle primera et cette variable sera
+    retirée."""
+    brut = os.environ.get(_ENV_MAX_TOKENS_EFFORT, "").strip()
+    if not brut:
+        raise LlmUnavailable(
+            f"ce tour porte l'effort de réflexion du travail, et {_ENV_MAX_TOKENS_EFFORT} "
+            "n'est pas posé sur ce worker : le raisonnement partage le plafond de "
+            "complétion avec la réponse, et le plafond ordinaire la couperait. Pose-le "
+            "(16000 pour mistral-medium-2604) — il n'y a pas de repli.")
+    if not brut.isdigit() or int(brut) < 1:
+        raise LlmUnavailable(f"{_ENV_MAX_TOKENS_EFFORT} = {brut!r} : un entier ≥ 1 est attendu")
+    return int(brut)
+
+
 def temperature_hote() -> Optional[float]:
     """`OTO_RUNNER_TEMPERATURE` — le défaut de CET hôte, quand le travail n'en
     déclare aucune ; absent aussi = on n'envoie RIEN et le fournisseur applique
@@ -335,7 +368,9 @@ def complete(*, system: str, messages: list, tools: list[dict],
     nom = modele or model()
     corps = {
         "model": nom,
-        "max_tokens": max_tokens(),
+        # L'effort du TRAVAIL raisonne dans la complétion : son plafond est à part
+        # (cf. `max_tokens_effort`). Sans effort de travail, le plafond ordinaire.
+        "max_tokens": max_tokens_effort() if effort else max_tokens(),
         "messages": [{"role": "system", "content": system}, *messages],
         # ⚠️ SANS cette cle, le fournisseur ne met rien en cache — mesure du
         # 01/09 : deux appels identiques, zero jeton mis en cache ; avec elle,

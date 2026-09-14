@@ -18,7 +18,7 @@ from oto_runner import agent_llm as A
 from oto_runner import agent_llm_openai as P
 from oto_runner import agent_runtime, worker
 from oto_runner.agent_runtime import AgentSpec
-from oto_runner.llm_types import Turn
+from oto_runner.llm_types import LlmUnavailable, Turn
 from tests.test_agent_runtime import FauxProvider, FauxTransport, _turn
 from tests.test_modele_du_travail import _FauxSdk
 
@@ -47,6 +47,10 @@ def corps(monkeypatch):
     monkeypatch.delenv("OTO_RUNNER_EFFORT", raising=False)
     monkeypatch.delenv("OTO_RUNNER_TEMPERATURE", raising=False)
     monkeypatch.delenv("OTO_RUNNER_PARALLEL_TOOLS", raising=False)
+    monkeypatch.delenv("OTO_RUNNER_MAX_TOKENS", raising=False)
+    # Le plafond d'un tour qui raisonne est posé par défaut dans ces bancs : sans lui, un
+    # effort de travail LÈVE (cf. la section du bas, qui le retire nommément).
+    monkeypatch.setenv("OTO_RUNNER_MAX_TOKENS_EFFORT", "16000")
     return vu
 
 
@@ -197,3 +201,55 @@ def test_le_refus_precede_session_et_run():
     avec la famille, avant le jeton délégué et la session MCP."""
     src = inspect.getsource(worker._traiter)
     assert src.index("_exiger_effort_servi(p, provider)") < src.index('job.get("delegated_token")')
+
+
+# ── Le plafond de complétion d'un tour qui raisonne (OTO_RUNNER_MAX_TOKENS_EFFORT) ──
+
+def test_un_effort_de_travail_prend_le_plafond_de_raisonnement(corps, monkeypatch):
+    monkeypatch.setenv("OTO_RUNNER_MAX_TOKENS", "8192")
+    P.complete(system="s", messages=[], tools=[], api_key="k", effort="high", temperature=0)
+    assert corps["max_tokens"] == 16000
+
+
+def test_un_effort_de_travail_sans_plafond_de_raisonnement_LEVE(corps, monkeypatch):
+    """⚠️ Pas de repli sur `OTO_RUNNER_MAX_TOKENS` : 8 192 couperait un tour Medium qui
+    raisonne (6 964 jetons de complétion mesurés au banc), et la coupe se lirait
+    `fin_anormale` sur la fiche plutôt que « worker mal réglé »."""
+    monkeypatch.delenv("OTO_RUNNER_MAX_TOKENS_EFFORT", raising=False)
+    with pytest.raises(LlmUnavailable) as e:
+        P.complete(system="s", messages=[], tools=[], api_key="k", effort="high")
+    assert "OTO_RUNNER_MAX_TOKENS_EFFORT" in str(e.value)
+    assert corps == {}, "rien n'est parti au fournisseur"
+
+
+def test_sans_effort_le_plafond_et_la_requete_ne_bougent_pas(corps):
+    """La variable posée sur l'hôte ne touche AUCUNE requête sans effort : les travaux
+    Large restent identiques à l'octet, plafond compris."""
+    P.complete(system="s", messages=[], tools=[], api_key="k", temperature=0)
+    assert corps["max_tokens"] == P.DEFAULT_MAX_TOKENS == 8192
+    assert set(corps) == {"model", "max_tokens", "messages", "prompt_cache_key", "temperature"}
+
+
+def test_l_effort_de_l_HOTE_garde_le_plafond_ordinaire(corps, monkeypatch):
+    """Un hôte qui pose `OTO_RUNNER_EFFORT` règle aussi `OTO_RUNNER_MAX_TOKENS` : la règle
+    ne vaut que pour l'effort porté par le TRAVAIL, et ne casse pas une configuration
+    d'hôte qui marchait."""
+    monkeypatch.setenv("OTO_RUNNER_EFFORT", "low")
+    monkeypatch.delenv("OTO_RUNNER_MAX_TOKENS_EFFORT", raising=False)
+    P.complete(system="s", messages=[], tools=[], api_key="k")
+    assert corps["reasoning_effort"] == "low" and corps["max_tokens"] == 8192
+
+
+def test_anthropic_ne_lit_pas_le_plafond_de_raisonnement(monkeypatch):
+    """`oto-runner-anthropic@1` charge `.env` puis `.env.anthropic` : la variable y est
+    visible, et n'y change rien. Ce provider envoie toujours un effort ; son plafond
+    reste `OTO_RUNNER_MAX_TOKENS`, et l'absence de la variable ne le fait pas lever."""
+    vu: dict = {}
+    monkeypatch.setattr(A, "_sdk", lambda: _FauxSdk(vu))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-plateforme")
+    monkeypatch.delenv("OTO_RUNNER_MAX_TOKENS", raising=False)
+    monkeypatch.setenv("OTO_RUNNER_MAX_TOKENS_EFFORT", "16000")
+    A.complete(system="s", messages=[], tools=[], effort="high")
+    assert vu["max_tokens"] == A.max_tokens() != 16000
+    monkeypatch.delenv("OTO_RUNNER_MAX_TOKENS_EFFORT", raising=False)
+    A.complete(system="s", messages=[], tools=[], effort="high")

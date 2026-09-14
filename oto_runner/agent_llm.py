@@ -265,6 +265,11 @@ def complete(*, system: str, messages: list, tools: list[dict],
     effort_retenu = effort or effort_hote()
     kwargs: dict = {
         "model": nom,
+        # ⚠️ `OTO_RUNNER_MAX_TOKENS_EFFORT` n'est PAS lu ici, et c'est délibéré : ce
+        # provider envoie TOUJOURS un effort (celui du travail ou du worker), si bien
+        # que la règle de la voie Chat Completions changerait le plafond de chaque
+        # requête — et lèverait sur un worker qui ne la pose pas. `oto-runner-anthropic@1`
+        # charge `.env` puis `.env.anthropic` et voit la variable : chemin inchangé.
         "max_tokens": max_tokens(),
         "system": systeme_cache(system),
         "messages": fil_cache(messages),
