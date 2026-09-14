@@ -125,7 +125,7 @@ def test_seuls_les_trois_verbes_varient_le_journal_est_IDENTIQUE(monkeypatch, tm
         job["payload"]["fleet"] = flotte
         fil = FauxBackend()
         W._un_travail(fil, job, _PROVIDER, file=file)
-        evs = [json.loads(l) for l in open(journal.chemin(flotte, 7))]
+        evs = [json.loads(l) for l in open(journal.chemin(flotte, 7, job["attempts"]))]
         for e in evs:
             e.pop("t")
             if e["ev"] == "debut":
@@ -168,7 +168,7 @@ def test_sans_file_un_travail_MORT_clot_son_run_et_rend_le_sien(monkeypatch, tmp
     assert sans.conclus[7]["status"] == "failed"
     assert sans.conclus[7]["run_id"] == "r-NEUF"
     assert "read timeout=10" in sans.conclus[7]["error"]
-    evs = [json.loads(l) for l in open(journal.chemin("sans-file", 7))]
+    evs = [json.loads(l) for l in open(journal.chemin("sans-file", 7, job["attempts"]))]
     assert [e["ev"] for e in evs[-2:]] == ["erreur", "resultat"]
     assert evs[-1]["outcome"] == "failed" and evs[-1]["run_finish"] == "ok"
 

@@ -129,7 +129,7 @@ def test_le_journal_du_travail_porte_l_ecart_des_l_ouverture(monkeypatch, tmp_pa
                           input="Lis d'abord la procédure avec oto_procedure, puis "
                                 "réserve une ligne avec data_claim_next.")
     W._un_travail(FauxBackend(), job, types.SimpleNamespace(__name__="p", model=lambda: "m"))
-    evs = [json.loads(l) for l in open(journal.chemin("banc", 7))]
+    evs = [json.loads(l) for l in open(journal.chemin("banc", 7, 1))]
     assert [e["ev"] for e in evs][:3] == ["debut", "outils", "run"]
     assert evs[0]["outils_autorises"] == ["data_claim_next", "data_write"]
     assert evs[1]["autorises"] == ["data_claim_next", "data_write"]

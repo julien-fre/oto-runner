@@ -34,7 +34,7 @@ class _BackendFactice:
             worker._demander_arret(15, None)
             return None
         self.restants -= 1
-        return {"id": 100 + self.restants, "kind": "start"}
+        return {"id": 100 + self.restants, "kind": "start", "attempts": 1}   # la forme servie
 
     def complete(self, *a, **kw):
         pass

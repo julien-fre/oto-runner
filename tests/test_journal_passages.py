@@ -138,10 +138,10 @@ def test_le_journal_du_worker_ouvre_conclut_et_ne_porte_aucun_secret(monkeypatch
     with caplog.at_level(logging.INFO):
         W._un_travail(FauxBackend(), _job(), _Provider)
     annonce = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("job 7 : journal"))
-    assert "7.jsonl (5 événements, dernier : resultat)" in annonce, (
+    assert "7.1.jsonl (5 événements, dernier : resultat)" in annonce, (
         "le worker n'annonce son journal qu'après l'avoir RELU")
 
-    chemin = tmp_path / "passages" / "banc-demo" / "7.jsonl"
+    chemin = tmp_path / "passages" / "banc-demo" / "7.1.jsonl"
     assert chemin.exists(), "un répertoire par flotte, un fichier par travail"
     assert oct(chemin.stat().st_mode & 0o777) == "0o600", "donnée de file : 0600"
     evs = _lignes(chemin)
@@ -168,7 +168,7 @@ def test_un_plantage_laisse_type_message_ENTIER_et_pile(monkeypatch, tmp_path):
     b = FauxBackend()
     W._un_travail(b, _job(), _Provider)
 
-    evs = _lignes(tmp_path / "passages" / "banc-demo" / "7.jsonl")
+    evs = _lignes(tmp_path / "passages" / "banc-demo" / "7.1.jsonl")
     assert [e["ev"] for e in evs] == ["debut", "outils", "run", "modele",
                                       "erreur", "resultat"]
     erreur = evs[-2]
@@ -204,7 +204,7 @@ def test_un_travail_mort_en_plein_vol_CLOT_son_run_et_le_dit(monkeypatch, tmp_pa
     assert args["run_id"] == "r-NEUF" and args["outcome"] == "failed"
     assert "Read timed out" in args["note"], "la clôture porte le motif"
 
-    fin = _lignes(tmp_path / "passages" / "banc-demo" / "7.jsonl")[-1]
+    fin = _lignes(tmp_path / "passages" / "banc-demo" / "7.1.jsonl")[-1]
     assert fin["ev"] == "resultat" and fin["outcome"] == "failed"
     assert fin["run_finish"] == "ok" and fin["run_id"] == "r-NEUF"
     assert fin["resultat"]["type"] == "RuntimeError"
@@ -227,7 +227,7 @@ def test_un_run_finish_refuse_se_DIT_et_ne_masque_pas_la_cause(monkeypatch, tmp_
     monkeypatch.setattr(W, "McpSession", McpQuiRefuse)
     W._un_travail(FauxBackend(), _job(), _Provider)
 
-    evs = _lignes(tmp_path / "passages" / "banc-demo" / "7.jsonl")
+    evs = _lignes(tmp_path / "passages" / "banc-demo" / "7.1.jsonl")
     assert evs[-2]["ev"] == "erreur" and evs[-2]["message"] == "boum"
     assert evs[-1]["run_finish"].startswith("refusé : ")
 
@@ -327,3 +327,40 @@ def test_le_chemin_conversations_journalise_la_requete_et_les_outputs_bruts(monk
     assert requete["instructions"] == "le cadre" and requete["inputs"] == "vas-y"
     assert "Authorization" not in json.dumps(evs), "jamais la clé"
     assert evs[1][1]["outputs"] == _REPONSE["outputs"], "les outputs BRUTS, entiers"
+
+
+# ── Un travail réservé sans compteur est refusé (D′, suite d'oto#196) ────────
+
+def test_un_travail_de_la_file_SANS_attempts_est_refuse_en_le_nommant(monkeypatch, tmp_path):
+    """⚠️ `du_travail` retombait en silence sur `<job>.jsonl` quand `attempts` manquait :
+    exactement le mélange que le fichier par tentative supprime. Sur la file serveur, la
+    réservation rend toujours ce compteur — son absence est un contrat cassé. Le travail
+    est conclu en échec nommé, sans rien exécuter, et la boucle du worker ne tombe pas."""
+    from tests.test_worker_reprise import FauxBackend
+    joue: list = []
+    monkeypatch.setattr(W.agent_runtime, "run", lambda *a, **k: joue.append(1))
+    job = _job()
+    del job["attempts"]
+    b = FauxBackend()
+    W._un_travail(b, job, _Provider)
+
+    assert joue == [], "rien n'est exécuté"
+    assert ("complete", False, None) in b.appels, "le travail est rendu en échec à la file"
+    evs = _lignes(tmp_path / "passages" / "banc-demo" / "7.jsonl")
+    (erreur,) = [e for e in evs if e["ev"] == "erreur"]
+    assert erreur["type"] == "TentativeInconnue" and "attempts" in erreur["message"]
+
+
+def test_en_direct_un_travail_sans_attempts_tourne_et_garde_le_nom_court(monkeypatch, tmp_path):
+    """Le pendant : le mode direct ne reprend jamais un travail et n'a pas de compteur.
+    La garde ne vaut que pour la file serveur."""
+    from oto_runner.file_de_travail import SansFile
+    from tests.test_worker_reprise import FauxBackend
+    _boucle_scriptee(monkeypatch)
+    job = _job()
+    del job["attempts"]
+    sans = SansFile()
+    W._un_travail(FauxBackend(), job, _Provider, file=sans)
+
+    assert sans.conclus[7]["status"] == "done"
+    assert (tmp_path / "passages" / "banc-demo" / "7.jsonl").exists()

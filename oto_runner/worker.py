@@ -244,6 +244,26 @@ class EffortNonServi(RuntimeError):
     run, comme une famille étrangère : rien n'est dépensé."""
 
 
+class TentativeInconnue(RuntimeError):
+    """Un travail réservé sur la file SERVEUR arrive sans son compteur de tentatives.
+
+    ⚠️ La réservation le rend toujours (`attempts`, oto-backend `db/runner_jobs`) : son
+    absence veut dire que le contrat est cassé. Le journal se nommerait alors par le
+    seul identifiant, et une reprise s'ajouterait à la trace de la précédente — le
+    mélange qu'un fichier par tentative (oto#196) supprime, sans que rien ne le dise.
+    Le mode direct, qui ne reprend jamais un travail, n'a pas de compteur : il n'est
+    pas concerné."""
+
+
+def _exiger_tentative(job: dict) -> None:
+    if job.get("attempts") is None:
+        raise TentativeInconnue(
+            f"le travail {job.get('id')} est arrivé de la file sans son compteur de "
+            "tentatives (`attempts`) : le contrat de réservation est cassé. Il n'est pas "
+            "exécuté — sa trace se nommerait par le seul identifiant, et une reprise s'y "
+            "mêlerait à la précédente.")
+
+
 def _exiger_effort_servi(p: dict, provider) -> None:
     effort = str(p.get("effort") or "").strip()
     if effort and getattr(provider, "ONE_SHOT", False):
@@ -528,6 +548,7 @@ def _un_travail(backend: Backend, job: dict, provider, file=None) -> None:
     plantage. L'échec d'un travail n'arrête pas la batterie ; il laisse un
     journal qui dit où il en était. `file` : cf. `_traiter` — le seul point de
     variation ; None = le backend sert la file (production)."""
+    heberge = file is None
     file = backend if file is None else file
     j = journal.du_travail(job)
     journal.debut(j, job, provider)
@@ -537,6 +558,10 @@ def _un_travail(backend: Backend, job: dict, provider, file=None) -> None:
     # d'être nommé, sinon ça LÈVE en nommant le chemin — le worker est celui qui
     # écrit, un journal qu'il ne peut pas relire est un défaut, pas un aléa.
     try:
+        if heberge:
+            # La file serveur rend toujours le compteur. L'exiger ICI, dans le `try`,
+            # conclut le travail en échec nommé au lieu de faire tomber la boucle `main`.
+            _exiger_tentative(job)
         _traiter(backend, job, provider, journal_=j, file=file, tenu=tenu)
         logger.info("job %s : journal %s", job.get("id"), journal.relu(j.chemin))
     except IdentiteInvalide as e:

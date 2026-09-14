@@ -55,7 +55,7 @@ class _PlateformeQuiBascule:
             worker._demander_arret(15, None)   # file vide : on fait finir le test
             return None
         self.restants -= 1
-        return {"id": 200 + self.restants, "kind": "start"}
+        return {"id": 200 + self.restants, "kind": "start", "attempts": 1}   # la forme servie
 
     def complete(self, job_id, ok=True, error=None, run_id=None, result=None):
         # La signature EST celle de `FileDeTravail` : un travail en échec rend
