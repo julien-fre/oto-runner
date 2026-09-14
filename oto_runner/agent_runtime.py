@@ -285,7 +285,8 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
         prompt: Optional[str] = None,
         history: Optional[list] = None, on_turn: Optional[OnTurn] = None,
         api_key: Optional[str] = None,
-        on_event: Optional[OnEvent] = None) -> AgentResult:
+        on_event: Optional[OnEvent] = None,
+        workspace: Optional[str] = None) -> AgentResult:
     """La boucle, plus **ce qu'elle a déjà dépensé quand elle casse**.
 
     ⚠️ Les jetons d'un déroulé MORT (13/09/2026) : ils ont été dépensés chez le
@@ -303,7 +304,7 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
     try:
         return _run(spec, transport, provider, compte, prompt=prompt,
                     history=history, on_turn=on_turn, api_key=api_key,
-                    on_event=on_event)
+                    on_event=on_event, workspace=workspace)
     except BaseException as e:
         # L'usage PAR POSTE tel que le comptage le rend (`None` = non déclaré sur au
         # moins un tour) et la couverture qui le fonde : un déroulé mort se lit comme
@@ -319,7 +320,8 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
          prompt: Optional[str] = None,
          history: Optional[list] = None, on_turn: Optional[OnTurn] = None,
          api_key: Optional[str] = None,
-         on_event: Optional[OnEvent] = None) -> AgentResult:
+         on_event: Optional[OnEvent] = None,
+         workspace: Optional[str] = None) -> AgentResult:
     """La boucle : tours de modèle et d'outils jusqu'à conclusion ou plafond.
 
     `history` = les `provider_raw` du fil, rejoués dans l'ordre (continuation d'un
@@ -380,7 +382,11 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
                                  effort=spec.effort,
                                  max_output_tokens=spec.max_output_tokens,
                                  modele=spec.model,
-                                 on_event=on_event)
+                                 on_event=on_event,
+                                 # Le workspace d'une clé d'organisation, comme la clé : un
+                                 # satellite du credential, jamais journalisé. Transmis
+                                 # seulement s'il est posé.
+                                 **({"workspace": workspace} if workspace else {}))
         duree_tour_ms = int((time.monotonic() - debut_tour) * 1000)
         n_tours += 1
         non_mesures = compteur.ajouter(turn.usage)

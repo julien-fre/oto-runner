@@ -46,7 +46,10 @@ _SUR = re.compile(r"[^A-Za-z0-9._-]+")
 # Les clés d'un travail qui portent un secret remis à la réservation. Tout ce qui
 # finit par `_token`/`_key`/`secret` tombe aussi : un champ ajouté demain côté
 # serveur sous cette forme ne doit pas finir sur disque par oubli d'ici.
-_SECRETS = ("delegated_token", "model_key")
+# `model_workspace` (14/09/2026) n'est pas un secret, mais un satellite de la clé
+# d'organisation remis avec elle : il ne va pas plus sur disque qu'elle, et son nom
+# n'est pris par aucun suffixe.
+_SECRETS = ("delegated_token", "model_key", "model_workspace")
 _SUFFIXES_SECRETS = ("_token", "_key", "secret")
 
 

@@ -128,7 +128,7 @@ def test_un_tools_list_vide_echoue_net(monkeypatch):
 
 
 # ── L'org se pose même quand le tool déclare AUSSI `_project` ────────────────
-# Mesuré le 07/09/2026 sur 333 travaux de la campagne Audiens : `data_claim_next`
+# Mesuré le 07/09/2026 sur 333 travaux de la campagne : `data_claim_next`
 # déclare les deux. La règle d'avant ne posait `_org` QUE si `_project` était
 # absent, en supposant qu'un projet résout son org. Le projet était bien
 # transmis, et l'appel se résolvait quand même dans l'org du jeton — refus, puis

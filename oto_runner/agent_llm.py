@@ -226,7 +226,8 @@ def complete(*, system: str, messages: list, tools: list[dict],
              modele: Optional[str] = None,
              effort: Optional[str] = None,
              max_output_tokens: Optional[int] = None,
-             on_event: Optional[Callable[[str, dict], None]] = None) -> Turn:
+             on_event: Optional[Callable[[str, dict], None]] = None,
+             workspace: Optional[str] = None) -> Turn:
     """UN tour de modèle — synchrone : le worker est un process dédié, pas un
     serveur mono-loop, il a le droit d'attendre.
 
@@ -261,7 +262,12 @@ def complete(*, system: str, messages: list, tools: list[dict],
     anthropic = _sdk()
     if anthropic is None:
         raise LlmUnavailable("le paquet `anthropic` n'est pas installé")
-    client = anthropic.Anthropic(api_key=api_key or resolve_key())
+    # ⚠️ Une clé d'ORGANISATION Anthropic (créée hors d'un workspace) fait refuser toute
+    # requête qui ne nomme pas le workspace à facturer (14/09/2026). Il arrive du travail,
+    # à côté de la clé, et part en EN-TÊTE — ni dans le `Turn`, ni dans le journal.
+    client = anthropic.Anthropic(
+        api_key=api_key or resolve_key(),
+        **({"default_headers": {"anthropic-workspace-id": workspace}} if workspace else {}))
     nom = modele or model()
     effort_retenu = effort or effort_hote()
     kwargs: dict = {

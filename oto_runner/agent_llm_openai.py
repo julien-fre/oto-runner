@@ -352,7 +352,8 @@ def complete(*, system: str, messages: list, tools: list[dict],
              modele: Optional[str] = None,
              effort: Optional[str] = None,
              max_output_tokens: Optional[int] = None,
-             on_event: Optional[Callable[[str, dict], None]] = None) -> Turn:
+             on_event: Optional[Callable[[str, dict], None]] = None,
+             workspace: Optional[str] = None) -> Turn:
     """UN tour de modèle — synchrone, le worker a le droit d'attendre.
 
     Le `system` passe en premier message (la convention OpenAI) ; `messages` est
@@ -361,6 +362,14 @@ def complete(*, system: str, messages: list, tools: list[dict],
 
     `on_event(type, champs)` : le journal du travail, quand la boucle en tient
     un — il reçoit chaque retentative de transport (cf. `_post_borne`)."""
+    if workspace:
+        # Un workspace n'a de sens que pour une clé Anthropic : le recevoir ici, c'est un
+        # travail mal routé. Refusé en le nommant plutôt qu'ignoré — un réglage qui ne
+        # fait rien se croit appliqué.
+        raise LlmUnavailable(
+            "ce travail porte un workspace de clé Anthropic (`model_workspace`), et ce "
+            "worker sert la voie Chat Completions, qui n'en a pas l'usage : il n'est pas "
+            "exécuté.")
     nom = modele or model()
     corps = {
         "model": nom,

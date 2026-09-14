@@ -135,10 +135,16 @@ class _McpMuet:
 
 def _cle_passee_a_la_boucle(monkeypatch, job):
     """Joue `_traiter` jusqu'à la boucle de modèle et rend l'`api_key` reçue."""
+    return _vu_par_la_boucle(monkeypatch, job).get("api_key", "PAS D'APPEL")
+
+
+def _vu_par_la_boucle(monkeypatch, job) -> dict:
+    """Joue `_traiter` jusqu'à la boucle de modèle et rend la clé ET le workspace reçus."""
     vue = {}
 
     def _run(*a, **kw):
         vue["api_key"] = kw.get("api_key")
+        vue["workspace"] = kw.get("workspace")
         raise _Stop
 
     monkeypatch.setattr(worker, "McpSession", _McpMuet)
@@ -156,7 +162,7 @@ def _cle_passee_a_la_boucle(monkeypatch, job):
         worker._traiter(_BackendMuet(), job, _P)
     except _Stop:
         pass
-    return vue.get("api_key", "PAS D'APPEL")
+    return vue
 
 
 def test_la_cle_du_travail_est_celle_qui_paie_le_modele(monkeypatch):

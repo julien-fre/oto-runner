@@ -398,6 +398,10 @@ def _traiter(backend: Backend, job: dict, provider,
     # pour le travail d'une autre — et le seul endroit où ça se verrait serait
     # sa facture. Absente : le provider retombe sur la clé de la plateforme.
     cle = job.get("model_key") or None
+    # Le workspace d'une clé d'ORGANISATION Anthropic (oto-backend, 14/09/2026) : sans lui,
+    # chaque requête faite avec cette clé est refusée. Remis avec la clé, et comme elle,
+    # il ne vit que le temps de ce travail et n'entre dans aucun journal.
+    workspace = job.get("model_workspace") or None
 
     # ⚠️ Le discriminant de la reprise est le RUN LIÉ, pas le kind : un `start`
     # re-claimé après une mort en plein tour porte déjà son run_id (bind_run a
@@ -482,7 +486,7 @@ def _traiter(backend: Backend, job: dict, provider,
     else:
         res = agent_runtime.run(spec, mcp, provider, prompt=prompt,
                                 history=historique, on_turn=apposer, api_key=cle,
-                                on_event=on_event)
+                                on_event=on_event, workspace=workspace)
 
     # ⚠️ Le worker ne juge PAS ce que l'agent a produit. Il ne sait pas ce
     # qu'écrire veut dire, ni où l'agent devait écrire, ni si ne rien écrire

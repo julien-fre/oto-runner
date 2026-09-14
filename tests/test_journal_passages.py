@@ -129,6 +129,7 @@ def _job():
     job = job_de_base("start")
     job["payload"]["fleet"] = "banc-demo"
     job["model_key"] = "sk-la-cle-de-l-org"
+    job["model_workspace"] = "wrkspc_du_banc"
     return job
 
 
@@ -155,6 +156,9 @@ def test_le_journal_du_worker_ouvre_conclut_et_ne_porte_aucun_secret(monkeypatch
     brut = chemin.read_text()
     assert "oto_delegue" not in brut and "sk-la-cle" not in brut, "JAMAIS un secret"
     assert "delegated_token" not in brut and "model_key" not in brut
+    assert "wrkspc_du_banc" not in brut and "model_workspace" not in brut, (
+        "le workspace d'une clé d'organisation voyage avec la clé, et comme elle, jamais "
+        "dans le journal")
     fin = evs[-1]
     assert fin["outcome"] == "done" and fin["run_id"] == "r-NEUF"
     assert fin["resultat"]["stopped"] == "end_turn" and fin["resultat"]["usage_tokens"] == 12

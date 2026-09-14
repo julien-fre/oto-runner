@@ -19,7 +19,7 @@ from oto_runner.agent_runtime import AgentResult
 from tests.test_worker_reprise import FauxBackend, FauxMcp
 from tests.test_worker_reprise import _job as _travail
 
-LECTURE = "Lis la procédure `audiens-passef` avec oto_procedure et applique-la."
+LECTURE = "Lis la procédure `passe-f` avec oto_procedure et applique-la."
 
 
 def _job(**kw):
