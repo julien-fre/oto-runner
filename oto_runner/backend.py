@@ -213,7 +213,8 @@ class Backend:
         return refus
 
     # ── la file de jobs (runner.jobs, R2) ────────────────────────────────────
-    def claim(self, lease_seconds: int = 600, depot: str = "") -> Optional[dict]:
+    def claim(self, lease_seconds: int = 600, depot: str = "",
+              org_key_only: bool = False) -> Optional[dict]:
         """Réserve un travail — et NOMME le dépôt de clé qu'on sait consommer.
 
         Le backend y répond par `model_key` quand l'org du travail a déposé cette
@@ -236,6 +237,13 @@ class Backend:
         corps = {"op": "claim", "lease_seconds": lease_seconds}
         if depot:
             corps["provider"] = depot
+        # ⚠️ `org_key_only` n'est envoyé QUE s'il est posé — même leçon que
+        # `provider` (04/09) : une route qui ne le déclare pas répond
+        # `unknown_fields` à chaque réservation. Un worker ordinaire envoie
+        # exactement le corps d'avant ; seul un worker « clés clients » exige un
+        # backend qui le déclare (oto-backend, `runner.jobs op=claim`).
+        if org_key_only:
+            corps["org_key_only"] = True
         return self._post("/api/me/runner/jobs", corps).get("job")
 
     def enqueue(self, kind: str, payload: dict,
