@@ -292,6 +292,36 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
         history: Optional[list] = None, on_turn: Optional[OnTurn] = None,
         api_key: Optional[str] = None,
         on_event: Optional[OnEvent] = None) -> AgentResult:
+    """La boucle, plus **ce qu'elle a déjà dépensé quand elle casse**.
+
+    ⚠️ Les jetons d'un déroulé MORT (13/09/2026) : ils ont été dépensés chez le
+    fournisseur quoi qu'il arrive ensuite, et ils mouraient avec la pile — le
+    serveur comptait donc ZÉRO sur les déroulés qui partent en vrille,
+    c'est-à-dire les plus chers, et qui recommencent à chaque tentative.
+
+    L'accumulateur est créé ICI et passé à la boucle, qui le REMPLIT en place :
+    c'est ce qui le rend lisible depuis l'extérieur quand une exception traverse.
+    Accroché à l'exception plutôt que rendu — le contrat de `run` est de LEVER
+    quand ça casse, et le changer ferait passer un échec pour un résultat auprès
+    de tous ses appelants.
+    """
+    compte: dict = {"usage": dict.fromkeys(USAGE_KEYS, 0), "pas": 0, "servi": None}
+    try:
+        return _run(spec, transport, provider, compte, prompt=prompt,
+                    history=history, on_turn=on_turn, api_key=api_key,
+                    on_event=on_event)
+    except BaseException as e:
+        e.usage_partiel = dict(compte["usage"])   # type: ignore[attr-defined]
+        e.modele_partiel = compte["servi"]        # type: ignore[attr-defined]
+        e.pas_partiels = compte["pas"]            # type: ignore[attr-defined]
+        raise
+
+
+def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
+         prompt: Optional[str] = None,
+         history: Optional[list] = None, on_turn: Optional[OnTurn] = None,
+         api_key: Optional[str] = None,
+         on_event: Optional[OnEvent] = None) -> AgentResult:
     """La boucle : tours de modèle et d'outils jusqu'à conclusion ou plafond.
 
     `history` = les `provider_raw` du fil, rejoués dans l'ordre (continuation d'un
@@ -332,7 +362,10 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
         note("descriptions_outils", outils=list(servies),
              coupees=[d["outil"] for d in servies if d["servie"] < d["longueur"]])
     steps: list[AgentStep] = []
-    usage = dict.fromkeys(USAGE_KEYS, 0)
+    # ⚠️ L'usage vient de l'APPELANT et se remplit en place : c'est ce qui le rend
+    # lisible quand une exception traverse la boucle (cf. `run`). Le reste du
+    # corps est inchangé, à l'octet.
+    usage = compte["usage"]
     stopped = "end_turn"
     reply = ""
     servi: Optional[str] = None
@@ -356,6 +389,7 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
         # Le DERNIER tour fait foi : un fournisseur qui bascule d'alias en cours
         # de déroulé a servi les deux, et c'est le second qu'on retrouvera.
         servi = turn.model or servi
+        compte["servi"], compte["pas"] = servi, len(steps)
         note("modele", texte=turn.text, stop_reason=turn.stop_reason,
              appels=[{"id": c.id, "nom": c.name, "arguments": c.arguments}
                      for c in turn.tool_calls],

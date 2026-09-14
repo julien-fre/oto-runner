@@ -186,6 +186,34 @@ def _resume(result: dict, e: BackendError) -> dict:
                                                 "octets": len(json.dumps(result))}}
 
 
+def resultat_partiel(e: BaseException, modele_demande: str) -> Optional[dict]:
+    """Ce qu'un déroulé MORT a tout de même coûté — ou None s'il n'a rien dépensé.
+
+    Même forme que `resultat_declare`, pour que le serveur n'ait qu'UNE façon de
+    lire un coût. `stopped` vaut le type de l'exception : la ligne dit alors à la
+    fois ce qui a été dépensé et pourquoi ça s'est arrêté.
+
+    ⚠️ `None` quand aucun jeton n'a été mesuré — un déroulé mort AVANT son premier
+    tour n'a rien coûté, et écrire des zéros le ferait passer pour mesuré. C'est
+    la même distinction que côté serveur : NULL n'est pas 0.
+    """
+    usage = getattr(e, "usage_partiel", None)
+    if not usage or not any(usage.values()):
+        return None
+    entree = int(usage.get("input_tokens") or 0)
+    sortie = int(usage.get("output_tokens") or 0)
+    return {
+        "usage_tokens": entree + sortie,
+        "usage_input": entree,
+        "usage_output": sortie,
+        "usage_cache_read": int(usage.get("cache_read_input_tokens") or 0),
+        "usage_cache_write": int(usage.get("cache_creation_input_tokens") or 0),
+        "stopped": type(e).__name__,
+        "steps": int(getattr(e, "pas_partiels", 0) or 0),
+        "model": getattr(e, "modele_partiel", None) or modele_demande,
+    }
+
+
 def en_echec(journal_, tenu: RunEnCours, job: dict, file,
              e: BaseException, modele_demande: str) -> None:
     """Ce qu'un travail MORT doit encore faire : clore son run en `failed` (ce
@@ -211,8 +239,17 @@ def en_echec(journal_, tenu: RunEnCours, job: dict, file,
         # appels dans le journal d'org (le bilan attribue ses refus d'écriture
         # par run). Sans lui, les refus d'un travail mort n'appartenaient à
         # personne — et le bilan les comptait pour la flotte d'à côté.
+        #
+        # ⚠️ **Et les JETONS partent avec** (13/09/2026). Un déroulé qui casse a
+        # dépensé chez le fournisseur exactement comme un déroulé qui aboutit, et
+        # il peut recommencer à chaque tentative. Tant que l'échec ne rendait
+        # rien, ces jetons n'existaient nulle part : le serveur comptait zéro sur
+        # les déroulés qui partent en vrille, c'est-à-dire les plus chers.
+        # `run` les accroche à l'exception (`usage_partiel`) précisément pour
+        # qu'ils survivent à la pile.
         file.complete(job["id"], ok=False, error=str(e)[:_NOTE_MAX],
-                      run_id=tenu.run_id)
+                      run_id=tenu.run_id,
+                      result=resultat_partiel(e, modele_demande))
     except BackendError as e2:
         # Bail déjà perdu (re-claimé ailleurs) : le job ne nous appartient plus,
         # on n'insiste pas.
