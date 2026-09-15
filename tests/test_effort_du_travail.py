@@ -281,3 +281,40 @@ def test_le_refus_precede_session_et_run():
     avec la famille, avant le jeton délégué et la session MCP."""
     src = inspect.getsource(worker._traiter)
     assert src.index("_exiger_effort_servi(p, provider)") < src.index('job.get("delegated_token")')
+
+
+# ── Le plafond et le `top_p` EFFECTIVEMENT envoyés remontent au journal (15/09/2026) ──
+
+def test_le_tour_mistral_porte_le_plafond_et_le_top_p_envoyes(corps):
+    """Une sortie coupée (`length`, `model_length`) ne se diagnostique pas sans le
+    plafond APPLIQUÉ — et depuis que le travail le porte, l'`.env` du worker ne le dit
+    plus. Le `top_p` suit la même règle : il n'est posé que dans le cas qui l'exige
+    (effort + échantillonnage glouton), et le journal doit dire lequel a tourné."""
+    turn = P.complete(system="s", messages=[], tools=[], api_key="k",
+                      effort="high", temperature=0, max_output_tokens=16000)
+    assert corps["max_tokens"] == 16000 and corps["top_p"] == 1
+    assert turn.plafond == 16000 and turn.top_p == 1
+
+
+def test_sans_effort_le_tour_ne_porte_aucun_top_p(corps):
+    """`top_p` absent du corps ⟹ absent du tour : le journal ne doit pas laisser croire
+    qu'un réglage a été envoyé quand la requête est restée inchangée à l'octet."""
+    turn = P.complete(system="s", messages=[], tools=[], api_key="k",
+                      temperature=0, max_output_tokens=8192)
+    assert "top_p" not in corps and turn.top_p is None and turn.plafond == 8192
+
+
+def test_le_tour_anthropic_porte_son_plafond(sdk):
+    turn = A.complete(system="s", messages=[], tools=[], effort="high",
+                      max_output_tokens=32000)
+    assert turn.plafond == 32000 == sdk["max_tokens"]
+
+
+def test_le_journal_du_tour_dit_le_plafond_et_le_top_p_partis():
+    evenements: list = []
+    p = FauxProvider([Turn(text="fini", raw_content=[], effort="high",
+                           plafond=16000, top_p=1)])
+    agent_runtime.run(AgentSpec(system="s", tools=frozenset(), max_steps=2), FauxTransport(), p,
+                      prompt="go", on_event=lambda ev, champs: evenements.append((ev, champs)))
+    (tour,) = [c for ev, c in evenements if ev == "modele"]
+    assert (tour["plafond"], tour["top_p"]) == (16000, 1)

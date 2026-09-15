@@ -50,6 +50,14 @@ class Turn:
     # celui de l'hôte à défaut, ou rien. Porté par le tour, comme la température,
     # pour que le journal le LISE au lieu de le déduire d'un `.env`.
     effort: Optional[str] = None
+    # Le plafond de COMPLÉTION effectivement envoyé sur ce tour, et le `top_p` quand il
+    # l'a été (Mistral l'exige en échantillonnage glouton avec effort). Portés par le
+    # tour pour la même raison que la température : une sortie coupée (`max_tokens`,
+    # `length`) ne se diagnostique pas si le plafond appliqué doit se déduire d'un `.env`
+    # relu après coup — et depuis que le TRAVAIL porte son plafond, ce `.env` ne dit même
+    # plus la vérité.
+    plafond: Optional[int] = None
+    top_p: Optional[float] = None
     # Un défaut de FORME constaté dans la réponse du fournisseur — aujourd'hui un
     # seul : un appel d'outil rendu en texte au lieu d'un `tool_calls`
     # (`{"forme": "reference+texte_json", "outil": <nom>}`). Décrit, jamais

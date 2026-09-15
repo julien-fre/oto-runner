@@ -183,7 +183,7 @@ def debut(journal: Journal, job: dict, provider) -> None:
     journal.ecrire("debut", job=_sans_secrets(job),
                    outils_autorises=sorted(p.get("tools") or ()),
                    provider=getattr(provider, "__name__", None),
-                   modele_demande=_modele(provider))
+                   modele_demande=modele_demande(job, provider))
 
 
 def ecart_instruction(catalogue: Optional[frozenset], autorises, instruction: str) -> dict:
@@ -220,7 +220,21 @@ def erreur(journal: Journal, e: BaseException) -> None:
                    traceback=traceback.format_exc())
 
 
-def _modele(provider) -> Optional[str]:
+def modele_demande(job: dict, provider) -> Optional[str]:
+    """Le modèle que CE TRAVAIL demande : celui qu'il DÉCLARE (`payload.model`,
+    oto-backend#939), sinon celui que le worker sert par défaut.
+
+    ⚠️ Lire `provider.model()` seul MENTAIT depuis que la flotte choisit son
+    modèle par travail : c'est le modèle CONFIGURÉ du worker (`OTO_RUNNER_MODEL`),
+    pas celui du job. Tout travail Small ou Medium servi par un worker configuré
+    en Large journalisait donc « servi small, demandé large » — une substitution
+    qui n'a jamais eu lieu. Relevé le 15/09/2026 sur les passages : 100 % des
+    travaux Small et Medium de la nuit portaient ce faux écart, et le même nom
+    partait au serveur comme `model` du résultat quand le fournisseur, lui,
+    n'avait rien rapporté."""
+    declare = str((job.get("payload") or {}).get("model") or "").strip()
+    if declare:
+        return declare
     try:
         return provider.model()
     except Exception:  # noqa: BLE001 — un relevé d'observabilité ne bloque pas l'ouverture

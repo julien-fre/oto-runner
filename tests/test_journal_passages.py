@@ -368,3 +368,60 @@ def test_en_direct_un_travail_sans_attempts_tourne_et_garde_le_nom_court(monkeyp
 
     assert sans.conclus[7]["status"] == "done"
     assert (tmp_path / "passages" / "banc-demo" / "7.jsonl").exists()
+
+
+# ── Le modèle DEMANDÉ est celui du travail, pas celui de l'unité (15/09/2026) ──
+
+def test_le_modele_DEMANDE_est_celui_du_travail_pas_celui_de_l_unite(monkeypatch, tmp_path):
+    """Depuis que la flotte choisit son modèle par travail (`payload.model`,
+    oto-backend#939), `provider.model()` n'est plus le modèle demandé : c'est celui
+    CONFIGURÉ de l'unité (`OTO_RUNNER_MODEL`). Le relever comme « demandé »
+    fabriquait une substitution qui n'a jamais eu lieu — relevé le 15/09/2026 sur
+    les passages : 100 % des travaux Small et Medium de la nuit journalisaient
+    « servi small, demandé large », alors que le modèle envoyé était le bon."""
+    from tests.test_worker_reprise import FauxBackend
+    _boucle_scriptee(monkeypatch, resultat=AgentResult(
+        reply="fini", stopped="end_turn", model="mistral-small-2603",
+        usage={"input_tokens": 10, "output_tokens": 2}))
+    job = _job()
+    job["payload"]["model"] = "mistral-small-2603"
+    W._un_travail(FauxBackend(), job, _Provider)      # l'unité, elle, sert « gpt-oss-120b »
+
+    evs = _lignes(tmp_path / "passages" / "banc-demo" / "7.1.jsonl")
+    assert evs[0]["modele_demande"] == "mistral-small-2603", "dès l'ouverture"
+    assert evs[-1]["modele_demande"] == "mistral-small-2603", "et à la conclusion"
+    assert evs[-1]["modele_servi"] == "mistral-small-2603", (
+        "servi et demandé ÉGAUX : plus aucun faux écart à lire dans le journal")
+
+
+def test_sans_modele_declare_le_travail_retombe_sur_celui_de_l_unite(monkeypatch, tmp_path):
+    """Un agent déclaré avant que le champ existe ne porte aucun modèle : le relevé
+    reste celui de l'unité, exactement comme avant ce correctif."""
+    from tests.test_worker_reprise import FauxBackend
+    _boucle_scriptee(monkeypatch)
+    W._un_travail(FauxBackend(), _job(), _Provider)
+    evs = _lignes(tmp_path / "passages" / "banc-demo" / "7.1.jsonl")
+    assert evs[0]["modele_demande"] == "gpt-oss-120b"
+    assert evs[-1]["modele_demande"] == "gpt-oss-120b"
+
+
+def test_un_deroule_mort_estampille_le_modele_du_travail(monkeypatch, tmp_path):
+    """Le chemin qui COMPTE le plus : quand le fournisseur n'a rien rapporté, le
+    coût partiel part au serveur estampillé du modèle DEMANDÉ. Avec l'ancien relevé,
+    une ligne Small morte en vol était comptée « mistral-large » en base."""
+    from tests.test_worker_reprise import FauxBackend
+    boum = RuntimeError("boum")
+    boum.couverture_partielle = {"tours": 1, "declares": {}, "sommes": {}}
+    boum.usage_partiel = {"input_tokens": 5, "output_tokens": 1}
+    boum.pas_partiels = 1
+    _boucle_scriptee(monkeypatch, leve=boum)
+    job = _job()
+    job["payload"]["model"] = "mistral-small-2603"
+
+    b = FauxBackend()
+    W._un_travail(b, job, _Provider)
+
+    resultat = next(a[1] for a in b.appels if a[0] == "complete_result")
+    assert resultat and resultat["model"] == "mistral-small-2603", (
+        "le coût d'un déroulé mort s'estampille du modèle du TRAVAIL, jamais de "
+        "celui que l'unité sert par défaut")

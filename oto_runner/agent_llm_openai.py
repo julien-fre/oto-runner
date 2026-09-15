@@ -371,11 +371,13 @@ def complete(*, system: str, messages: list, tools: list[dict],
             "worker sert la voie Chat Completions, qui n'en a pas l'usage : il n'est pas "
             "exécuté.")
     nom = modele or model()
+    # Calculé UNE fois : il part au fournisseur ET au journal, porté par le tour.
+    plafond = plafond_de_sortie(max_output_tokens, effort)
     corps = {
         "model": nom,
         # Le plafond que porte le TRAVAIL, à défaut celui de l'hôte ; un effort de
         # travail sans plafond lève (cf. `plafond_de_sortie`).
-        "max_tokens": plafond_de_sortie(max_output_tokens, effort),
+        "max_tokens": plafond,
         "messages": [{"role": "system", "content": system}, *messages],
         # ⚠️ SANS cette cle, le fournisseur ne met rien en cache — mesure du
         # 01/09 : deux appels identiques, zero jeton mis en cache ; avec elle,
@@ -436,7 +438,8 @@ def complete(*, system: str, messages: list, tools: list[dict],
 
     if fin == "content_filter":
         return Turn(text="", tool_calls=(), stop_reason="refusal",
-                    raw_content=msg, usage=usage, model=servi, temperature=retenue, effort=effort_retenu)
+                    raw_content=msg, usage=usage, model=servi, temperature=retenue,
+                    effort=effort_retenu, plafond=plafond, top_p=corps.get("top_p"))
 
     calls = []
     for tc in (msg.get("tool_calls") or []):
@@ -477,7 +480,8 @@ def complete(*, system: str, messages: list, tools: list[dict],
                 tool_calls=tuple(calls),
                 stop_reason=("fin_anormale" if anormale
                              else "appel_mal_encode" if defaut else "end_turn"),
-                raw_content=msg, usage=usage, model=servi, temperature=retenue, effort=effort_retenu,
+                raw_content=msg, usage=usage, model=servi, temperature=retenue,
+                effort=effort_retenu, plafond=plafond, top_p=corps.get("top_p"),
                 defaut=defaut)
 
 

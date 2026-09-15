@@ -499,7 +499,10 @@ def _traiter(backend: Backend, job: dict, provider,
     # La donnée est protégée là où elle vit : la plateforme conserve la valeur
     # d'avant. Et ce que l'agent produit se juge par qui l'a commandé.
 
-    demande = _modele_courant(provider)
+    # Le modèle DEMANDÉ est celui du TRAVAIL (`journal.modele_demande`), pas celui
+    # du worker : sans ça, une campagne Small servie par un worker configuré en
+    # Large annonçait une substitution qui n'a jamais eu lieu.
+    demande = journal.modele_demande(job, provider) or _modele_courant(provider)
     resultat = conclusion.resultat_declare(res, demande)
     jetons, lus_en_cache = resultat["usage_tokens"], resultat["usage_cache_read"]
     echec = conclusion.echec_nomme(res)
@@ -588,7 +591,9 @@ def _un_travail(backend: Backend, job: dict, provider, file=None) -> None:
         # Sans ça, un incident de transport laissait un run ouvert et une ligne
         # verrouillée quinze minutes (nuit du 06/09, deux travaux).
         journal.erreur(j, e)
-        conclusion.en_echec(j, tenu, job, file, e, _modele_courant(provider))
+        conclusion.en_echec(j, tenu, job, file, e,
+                            journal.modele_demande(job, provider)
+                            or _modele_courant(provider))
         logger.exception("job %s en échec — journal : %s", job.get("id"),
                          journal.relu(j.chemin))
 

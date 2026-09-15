@@ -399,6 +399,7 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
                      for c in turn.tool_calls],
              usage=dict(turn.usage or {}), modele=turn.model,
              temperature=turn.temperature, effort=turn.effort,
+             plafond=turn.plafond, top_p=turn.top_p,
              duree_ms=duree_tour_ms, brut=turn.raw_content)
 
         # ⚠️ Un appel d'outil rendu en TEXTE n'est pas une conclusion (job 17275) :

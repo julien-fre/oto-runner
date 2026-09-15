@@ -270,6 +270,8 @@ def complete(*, system: str, messages: list, tools: list[dict],
         **({"default_headers": {"anthropic-workspace-id": workspace}} if workspace else {}))
     nom = modele or model()
     effort_retenu = effort or effort_hote()
+    # Calculé UNE fois : il part au fournisseur ET au journal, porté par le tour.
+    plafond = max_output_tokens or max_tokens()
     kwargs: dict = {
         "model": nom,
         # Le plafond que porte le TRAVAIL (le catalogue du backend le déclare par modèle),
@@ -277,7 +279,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
         # différence de la voie Chat Completions : ce provider envoie un effort à chaque
         # tour et le catalogue ne déclare aucun plafond Claude — lever les ferait tous
         # échouer.
-        "max_tokens": max_output_tokens or max_tokens(),
+        "max_tokens": plafond,
         "system": systeme_cache(system),
         "messages": fil_cache(messages),
     }
@@ -310,7 +312,8 @@ def complete(*, system: str, messages: list, tools: list[dict],
     raw = [_block_to_dict(b) for b in getattr(resp, "content", []) or []]
     if stop == "refusal":
         return Turn(text="", tool_calls=(), stop_reason="refusal",
-                    raw_content=raw, usage=usage, model=servi, effort=effort_retenu)
+                    raw_content=raw, usage=usage, model=servi, effort=effort_retenu,
+                    plafond=plafond)
 
     texts: list[str] = []
     calls: list[ToolCall] = []
@@ -336,4 +339,5 @@ def complete(*, system: str, messages: list, tools: list[dict],
                 tool_calls=tuple(calls),
                 stop_reason="fin_anormale" if anormale else stop,
                 raw_content=raw, usage=usage, model=servi, effort=effort_retenu,
+                plafond=plafond,
                 defaut={"forme": "fin_anormale", "stop_reason": stop} if anormale else None)
