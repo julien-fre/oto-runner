@@ -8,6 +8,7 @@ dependencies = ["requests>=2.31", "pyyaml>=6.0"]
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
+claude-code = ["claude-agent-sdk>=0.2.153"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

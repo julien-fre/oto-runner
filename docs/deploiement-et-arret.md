@@ -56,6 +56,27 @@ durée d'un travail  <  bail de la ligne (10 min)  <  patience de systemd (16 mi
 n'échoue, les travaux se font tuer à nouveau, et le journal n'écrit plus la ligne de
 sortie propre. C'est le seul témoin — son absence est le signal.
 
+## Le moteur Claude Code (`OTO_RUNNER_PROVIDER=claude-code`)
+
+Un agent qui sert ce moteur fait tourner Claude Code (sous-agents, compaction, jusqu'à
+400 tours) derrière la même session MCP que les autres. Ce qui diffère au déploiement :
+
+- **L'extra s'installe** : `pip install -e .[claude-code]`. La ligne de déploiement
+  (`pip install -e .`) ne l'amène PAS ; sans lui, le premier travail échoue en nommant
+  l'extra manquant.
+- **Le CLI est dans la roue, par plateforme** : `manylinux_2_17` x86_64 et aarch64 (binaire
+  natif, glibc, ~230 Mo) — pas de Node. Sur une autre plateforme pip retombe sur la source,
+  qui ne contient AUCUN binaire : vérifier `uname -m` et la glibc de la box avant.
+- **Un pool à part** : `OTO_RUNNER_PROVIDER` est par processus, donc de nouvelles unités à
+  côté de `oto-runner@{1,2,3}`, déclarées au script de déploiement.
+- **Qui paie** : un déroulé à sous-agents et 400 tours coûte un ordre de grandeur de plus
+  qu'une boucle de 24 tours (un run de sourcing mesuré sur GitHub : 5,82 $). Un
+  déclencheur webhook ne porte pas de `max_tokens` : le budget en vol est alors inerte. Sur
+  la clé de la plateforme, préférer `OTO_RUNNER_ORG_KEYS_ONLY=1` pour ce pool.
+- **La chaîne de nombres tient** : deadline murale `OTO_RUNNER_CLAUDE_CODE_WALL_S` (900 s
+  par défaut) < patience de systemd (16 min) ; le bail est prolongé pendant le déroulé.
+  Relever la deadline exige de relever `TimeoutStopSec`.
+
 ## Lancer une flotte : en unité, JAMAIS à la main
 
 ```bash

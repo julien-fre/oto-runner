@@ -22,5 +22,9 @@ def get_provider():
     if nom == "conversations":
         from . import agent_conversations
         return agent_conversations
+    if nom == "claude-code":
+        from . import agent_claude_code
+        return agent_claude_code
     raise SystemExit(
-        f"OTO_RUNNER_PROVIDER inconnu : `{nom}` (anthropic | openai | conversations)")
+        f"OTO_RUNNER_PROVIDER inconnu : `{nom}` "
+        "(anthropic | openai | conversations | claude-code)")

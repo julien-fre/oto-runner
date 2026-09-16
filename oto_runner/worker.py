@@ -270,7 +270,8 @@ def _exiger_tentative(job: dict) -> None:
 
 def _exiger_effort_servi(p: dict, provider) -> None:
     effort = str(p.get("effort") or "").strip()
-    if effort and getattr(provider, "ONE_SHOT", False):
+    if (effort and getattr(provider, "ONE_SHOT", False)
+            and not getattr(provider, "EFFORT_SERVI", False)):
         raise EffortNonServi(
             f"ce travail demande l'effort `{effort}` et ce worker sert la voie "
             "Conversations, qui ne l'envoie pas. Il n'est pas exécuté : le servir sans "
@@ -472,9 +473,24 @@ def _traiter(backend: Backend, job: dict, provider,
         # aucune prescription métier — ni où écrire, ni sous quelle forme :
         # c'est la procédure qui le dit à l'agent, pas l'exécuteur.
         ordre = prompt or _instruction_du(job)
-        res = provider.run_once(instructions=spec.system, inputs=ordre,
-                                tools=p.get("tools") or (), api_key=cle,
-                                modele=spec.model, on_event=on_event)
+        if getattr(provider, "OUTILS_LOCAUX", False):
+            # Le moteur Claude Code : la boucle tourne dans le worker, les outils
+            # passent par CETTE session MCP. Le bail se prolonge pendant le
+            # déroulé — pas de tours apposés pour le faire.
+            def battre() -> None:
+                try:
+                    file.extend(job["id"], _LEASE_S)
+                except BackendError as e:
+                    logger.warning("extend %s toléré : %s", job["id"], e)
+
+            res = provider.run_once(instructions=spec.system, inputs=ordre,
+                                    tools=p.get("tools") or (), api_key=cle,
+                                    modele=spec.model, on_event=on_event, mcp=mcp,
+                                    spec=spec, workspace=workspace, heartbeat=battre)
+        else:
+            res = provider.run_once(instructions=spec.system, inputs=ordre,
+                                    tools=p.get("tools") or (), api_key=cle,
+                                    modele=spec.model, on_event=on_event)
         # Le fil garde l'ORDRE et la SYNTHÈSE (l'observabilité au grain run) — le
         # verbatim des tours vit et meurt chez Mistral (store=False, conformité).
         releve = ", ".join(f"{s.tool}{'' if s.ok else ' (non exécuté)'}"

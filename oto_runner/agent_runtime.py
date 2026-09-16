@@ -341,6 +341,10 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
     # Lu UNE fois par déroulé, et DIT au journal : un passage se relit sans avoir
     # à deviner sous quel plafond de sortie d'outil il a tourné.
     limite_sortie = max_tool_output()
+    if plafond != spec.max_steps:
+        # Le travail en demandait davantage : la plateforme l'accepte, cette boucle non.
+        # Le dire évite de lire un `blocked` à 64 tours comme une procédure trop longue.
+        note("plafond_tours", demande=spec.max_steps, servi=plafond, plafond=HARD_MAX_STEPS)
     note("systeme", texte=spec.system, outils=sorted(spec.tools),
          max_steps=plafond, max_tokens=spec.max_tokens, label=spec.label,
          max_tool_output=limite_sortie, **_reglages_du_provider(provider))
