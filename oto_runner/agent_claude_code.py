@@ -334,10 +334,14 @@ def run_once(*, instructions: str, inputs: str, tools, api_key: Optional[str] = 
         if on_event:
             on_event(ev, champs)
 
-    dernier = [0.0]
+    dernier: list = [None]
 
     def battre() -> None:
-        if heartbeat is None or time.monotonic() - dernier[0] < _BATTEMENT_S:
+        # `None` : le premier battement part toujours. Une horloge monotone compte depuis
+        # le démarrage de la machine, donc un zéro initial taisait le premier battement
+        # sur une machine démarrée depuis moins d'une minute.
+        if heartbeat is None or (dernier[0] is not None
+                                 and time.monotonic() - dernier[0] < _BATTEMENT_S):
             return
         dernier[0] = time.monotonic()
         heartbeat()

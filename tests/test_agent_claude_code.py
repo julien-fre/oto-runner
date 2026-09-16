@@ -425,3 +425,10 @@ def test_la_boucle_classique_dit_le_plafond_qu_elle_impose():
                       prompt="go", on_event=lambda e, c: ev.append((e, c)))
     assert [c for e, c in ev if e == "plafond_tours"] == [
         {"demande": 200, "servi": 64, "plafond": 64}]
+
+
+def test_le_premier_battement_part_meme_sur_une_machine_juste_demarree(monkeypatch):
+    monkeypatch.setattr(AC.time, "monotonic", lambda: 5.0)
+    battements = []
+    _lancer(monkeypatch, _appelle, heartbeat=lambda: battements.append(1))
+    assert battements == [1]
