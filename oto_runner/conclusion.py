@@ -263,6 +263,30 @@ def resultat_partiel(e: BaseException, modele_demande: str) -> Optional[dict]:
     }
 
 
+def motif_d_echec(e: BaseException) -> str:
+    """Ce qu'on dit d'une mort, la CAUSE en tête : `<Type> : <message>`.
+
+    ⚠️ Le refus d'un fournisseur (SDK Anthropic ou OpenAI : `status_code` et `body`)
+    s'écrit `Error code: 400 - {'type': 'error', 'error': {'type':
+    'invalid_request_error', 'message': …}}` : quatre-vingts caractères d'enveloppe
+    avant la raison. Le regroupement des agents en échec garde la TÊTE du motif
+    (80 caractères, `agents_en_echec`), et n'y lisait que l'enveloppe — trois
+    tentatives d'un agent planifié mortes en une seconde, le 02/10/2026, sans qu'on
+    puisse dire pourquoi depuis l'API. Le statut, le genre et le message du
+    fournisseur passent donc devant ; une exception sans corps lisible reste dite
+    telle quelle, jamais reconstruite."""
+    statut = getattr(e, "status_code", None)
+    corps = getattr(e, "body", None)
+    if isinstance(statut, int) and isinstance(corps, dict):
+        err = corps["error"] if isinstance(corps.get("error"), dict) else corps
+        message = err.get("message")
+        if message:
+            genre = err.get("type") or err.get("code")
+            return (f"{type(e).__name__} : HTTP {statut}"
+                    f"{f' {genre}' if genre else ''} — {message}")
+    return f"{type(e).__name__} : {e}"
+
+
 def en_echec(journal_, tenu: RunEnCours, job: dict, file,
              e: BaseException, modele_demande: str) -> None:
     """Ce qu'un travail MORT doit encore faire : clore son run en `failed` (ce
@@ -273,7 +297,7 @@ def en_echec(journal_, tenu: RunEnCours, job: dict, file,
     l'appelant : `resultat` ne le remplace pas, il dit ce qu'on a FAIT de la
     mort. Un journal qui s'arrête sur `erreur` est un travail dont personne n'a
     rien rendu, et c'est précisément ce qu'on ne veut plus."""
-    motif = f"{type(e).__name__} : {e}"
+    motif = motif_d_echec(e)
     cloture = clore(tenu, "failed", note=f"travail interrompu — {motif}"[:_NOTE_MAX],
                     job_id=job.get("id"))
     if journal_ is not None:
@@ -296,7 +320,7 @@ def en_echec(journal_, tenu: RunEnCours, job: dict, file,
         # les déroulés qui partent en vrille, c'est-à-dire les plus chers.
         # `run` les accroche à l'exception (`usage_partiel`) précisément pour
         # qu'ils survivent à la pile.
-        file.complete(job["id"], ok=False, error=str(e)[:_NOTE_MAX],
+        file.complete(job["id"], ok=False, error=motif[:_NOTE_MAX],
                       run_id=tenu.run_id,
                       result=resultat_partiel(e, modele_demande))
     except BackendError as e2:
