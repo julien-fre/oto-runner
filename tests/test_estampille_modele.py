@@ -101,7 +101,7 @@ class _FauxTransport:
 
     @staticmethod
     def call(name, _args):
-        return f"{name}: ok", False
+        return f"{name}: ok", False, ()
 
 
 _SPEC = R.AgentSpec(system="s", tools=frozenset({"data_rows"}), max_steps=3)

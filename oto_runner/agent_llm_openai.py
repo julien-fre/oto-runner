@@ -27,6 +27,7 @@ from typing import Callable, Optional
 
 import requests
 
+from .contenu_outil import non_recues
 from .llm_types import EFFORT_SANS_RAISONNEMENT, LlmUnavailable, ToolCall, Turn
 
 logger = logging.getLogger("oto_runner")
@@ -330,9 +331,16 @@ def assistant_message(turn: Turn) -> dict:
 
 def tool_messages(results: list[dict]) -> list[dict]:
     """UN message `role:tool` PAR résultat, corrélé par `tool_call_id`.
-    `results` = [{id, text, is_error}] — l'erreur est un contenu comme un autre,
-    le modèle la lit pour se corriger."""
-    return [{"role": "tool", "tool_call_id": r["id"], "content": r["text"]}
+    `results` = [{id, text, is_error, images}] — l'erreur est un contenu comme un
+    autre, le modèle la lit pour se corriger.
+
+    ⚠️ Un message `role:tool` ne porte que du texte dans l'API Chat Completions :
+    une image rendue par un outil n'y entre pas, et le modèle le LIT — sinon il
+    croirait avoir vu ce que la ligne de texte décrit."""
+    return [{"role": "tool", "tool_call_id": r["id"],
+             "content": "\n".join([r["text"], non_recues(
+                 r["images"], "un résultat d'outil ne transmet pas d'image sur "
+                 "cette voie (Chat Completions)")]) if r["images"] else r["text"]}
             for r in results]
 
 

@@ -83,8 +83,8 @@ def test_les_deux_formes_de_fil():
     turn = Turn(text="", raw_content=msg)
     assert P.assistant_message(turn) is msg, \
         "le message assistant se rejoue COMPLET (tool_calls intacts, corrélés par id)"
-    outs = P.tool_messages([{"id": "c1", "text": "res1", "is_error": False},
-                            {"id": "c2", "text": "res2", "is_error": True}])
+    outs = P.tool_messages([{"id": "c1", "text": "res1", "is_error": False, "images": ()},
+                            {"id": "c2", "text": "res2", "is_error": True, "images": ()}])
     assert [o["role"] for o in outs] == ["tool", "tool"], "un message PAR résultat"
     assert outs[0]["tool_call_id"] == "c1" and outs[1]["content"] == "res2"
 

@@ -75,7 +75,7 @@ class _Outils:
 
     def call(self, name, arguments):
         self.appels.append((name, arguments))
-        return "3 lignes écrites", False
+        return "3 lignes écrites", False, ()
 
 
 # ── 1. Les arguments ─────────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ class FauxTransport:
 
     def call(self, name, arguments):
         self.appels.append((name, arguments))
-        return self.reponses.get(name, ("ok", False))
+        return self.reponses.get(name, ("ok", False, ()))
 
 
 class FauxProvider:
@@ -76,7 +76,7 @@ def test_un_outil_hors_allowlist_nest_jamais_transporte():
 
 def _servi(sortie: str) -> str:
     """Ce que le modèle a RÉELLEMENT reçu pour une sortie d'outil donnée."""
-    t = FauxTransport({"data_rows": (sortie, False)})
+    t = FauxTransport({"data_rows": (sortie, False, ())})
     p = FauxProvider([_turn(calls=[("data_rows", {})]), _turn(text="fini")])
     res = agent_runtime.run(SPEC, t, p, prompt="go")
     return res.messages[-2]["content"][0]["content"]
@@ -151,7 +151,7 @@ def test_un_refus_est_terminal_jamais_un_crash():
 
 
 def test_le_fil_est_appose_dans_lordre_et_en_double_etage():
-    t = FauxTransport({"data_rows": ('{"rows": []}', False)})
+    t = FauxTransport({"data_rows": ('{"rows": []}', False, ())})
     p = FauxProvider([_turn(text="je regarde", calls=[("data_rows", {"limit": 1})]),
                       _turn(text="terminé")])
     fil = []
@@ -200,7 +200,7 @@ def test_la_boucle_ne_connait_pas_la_forme_du_fil():
             return [{"type": "function", "function": {"name": s["name"]}}
                     for s in schemas]
 
-    t = FauxTransport({"data_rows": ("ok", False), "oto_procedure": ("doc", False)})
+    t = FauxTransport({"data_rows": ("ok", False, ()), "oto_procedure": ("doc", False, ())})
     tours = [Turn(text="", stop_reason="end_turn",
                   tool_calls=(ToolCall(id="a1", name="data_rows", arguments={}),
                               ToolCall(id="a2", name="oto_procedure", arguments={})),
@@ -229,8 +229,8 @@ def test_une_erreur_transitoire_est_rejouee_en_silence(monkeypatch):
         def call(self, name, arguments):
             self.essais += 1
             if self.essais == 1:
-                return ("serpapi_jobs : timeout lors de la recherche", True)
-            return ('{"jobs": []}', False)
+                return ("serpapi_jobs : timeout lors de la recherche", True, ())
+            return ('{"jobs": []}', False, ())
 
     t = Capricieux()
     p = FauxProvider([_turn(calls=[("data_rows", {})]), _turn(text="fini")])
@@ -249,7 +249,7 @@ def test_une_erreur_metier_nest_jamais_rejouee():
 
         def call(self, name, arguments):
             self.essais += 1
-            return ('{"error": "not_found", "siren": "123"}', True)
+            return ('{"error": "not_found", "siren": "123"}', True, ())
 
     t = Metier()
     p = FauxProvider([_turn(calls=[("data_rows", {})]), _turn(text="fini")])

@@ -63,7 +63,7 @@ def test_une_session_perdue_se_rouvre_et_lappel_est_rejoue(monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="oto_runner")
     ok = {"result": {"content": [{"type": "text", "text": "ligne écrite"}]}}
     s, etat = _session(monkeypatch, [_PERDUE, ok])
-    assert s.call(_WRITE, {"row": 1}) == ("ligne écrite", False)
+    assert s.call(_WRITE, {"row": 1}) == ("ligne écrite", False, ())
     assert etat["initialize"] == 2, "une réouverture, pas plus"
     assert etat["call"] == 2, "l'appel est rejoué UNE fois"
     assert "session MCP rouverte" in caplog.text
@@ -93,7 +93,7 @@ def test_un_mcp_session_id_refuse_se_lit_hors_json(monkeypatch):
     ok = {"result": {"content": [{"type": "text", "text": "ok"}]}}
     s, etat = _session(monkeypatch, [{"_brut": "Bad Request: Missing session ID"},
                                      ok])
-    assert s.call(_WRITE, {"row": 1}) == ("ok", False)
+    assert s.call(_WRITE, {"row": 1}) == ("ok", False, ())
     assert etat["initialize"] == 2
 
 
@@ -103,7 +103,7 @@ def test_une_erreur_metier_ne_rouvre_rien(monkeypatch):
     metier = {"result": {"isError": True,
                          "content": [{"type": "text", "text": "champ inconnu"}]}}
     s, etat = _session(monkeypatch, [metier])
-    assert s.call(_WRITE, {"row": 1}) == ("champ inconnu", True)
+    assert s.call(_WRITE, {"row": 1}) == ("champ inconnu", True, ())
     assert etat["initialize"] == 1 and etat["call"] == 1
 
 
@@ -128,7 +128,7 @@ def test_la_boucle_distingue_la_panne_de_transport_de_lerreur_doutil():
     assert pas.ok is False and pas.transport_ko is True
 
     p = FauxProvider([_turn(calls=[(_WRITE, {})]), _turn(text="je corrige")])
-    pas = agent_runtime.run(spec, FauxTransport({_WRITE: ("champ inconnu", True)}),
+    pas = agent_runtime.run(spec, FauxTransport({_WRITE: ("champ inconnu", True, ())}),
                             p, prompt="go").steps[0]
     assert pas.ok is False and pas.transport_ko is False, \
         "une erreur métier reste une réponse, pas une panne"

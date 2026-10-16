@@ -49,7 +49,7 @@ def test_une_erreur_d_outil_longue_est_journalisee_ENTIERE_et_plafonnee_pour_le_
     refus = ("écriture refusée par le schéma : `qualification_piece` = "
              "`cessation_registre` n'est pas une option — " + "détail " * 6_000)
     assert len(refus) > agent_runtime.max_tool_output()
-    t = FauxTransport({"data_write": (refus, True)})
+    t = FauxTransport({"data_write": (refus, True, ())})
     arguments = {"namespace": "vivier", "key": "@claimed",
                  "patch": {"qualification_piece": "cessation_registre"}}
     p = FauxProvider([_turn(text="j'écris", calls=[("data_write", arguments)]),

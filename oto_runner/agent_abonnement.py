@@ -35,6 +35,7 @@ from typing import Callable, Optional
 import requests
 
 from .agent_runtime import AgentResult, AgentStep
+from .contenu_outil import substitut
 
 logger = logging.getLogger("oto_runner")
 
@@ -134,7 +135,10 @@ def _borner(texte: str) -> str:
 
 
 def _message_borne(message: dict) -> dict:
-    """Le message tel que le CLI l'a rendu, sorties d'outils bornées pour le fil."""
+    """Le message tel que le CLI l'a rendu, sorties d'outils bornées pour le fil.
+
+    ⚠️ Une image d'un résultat d'outil y devient un SUBSTITUT texte : le backend
+    plafonne un tour à 256 000 caractères, qu'une seule image dépasse."""
     blocs = []
     for bloc in message.get("content") or []:
         if isinstance(bloc, dict) and bloc.get("type") == "tool_result":
@@ -142,11 +146,18 @@ def _message_borne(message: dict) -> dict:
             if isinstance(contenu, str):
                 bloc = {**bloc, "content": _borner(contenu)}
             elif isinstance(contenu, list):
-                bloc = {**bloc, "content": [
-                    {**c, "text": _borner(c["text"])} if isinstance(c, dict) and "text" in c else c
-                    for c in contenu]}
+                bloc = {**bloc, "content": [_bloc_borne(c) for c in contenu]}
         blocs.append(bloc)
     return {**message, "content": blocs}
+
+
+def _bloc_borne(bloc):
+    if isinstance(bloc, dict) and bloc.get("type") == "image":
+        source = bloc.get("source") or {}
+        return substitut(source.get("media_type") or "?", len(source.get("data") or ""))
+    if isinstance(bloc, dict) and "text" in bloc:
+        return {**bloc, "text": _borner(bloc["text"])}
+    return bloc
 
 
 class _Compteur:

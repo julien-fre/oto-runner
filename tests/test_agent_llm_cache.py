@@ -112,8 +112,8 @@ def test_le_point_mobile_se_pose_sur_le_dernier_bloc_du_dernier_message(monkeypa
     c = _client(monkeypatch)
     fil = [P.user_message("go"),
            {"role": "assistant", "content": [{"type": "text", "text": "je cherche"}]}]
-    fil += P.tool_messages([{"id": "t0", "text": "ligne 1", "is_error": False},
-                            {"id": "t1", "text": "ligne 2", "is_error": False}])
+    fil += P.tool_messages([{"id": "t0", "text": "ligne 1", "is_error": False, "images": ()},
+                            {"id": "t1", "text": "ligne 2", "is_error": False, "images": ()}])
     P.complete(system="s", messages=fil, tools=[], api_key="k")
     envoye = c.vu[0]["messages"]
     assert "cache_control" in envoye[-1]["content"][-1]

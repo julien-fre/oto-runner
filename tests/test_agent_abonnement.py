@@ -82,7 +82,7 @@ class SessionFactice:
 
     def call(self, nom, args):
         self.appels.append((nom, args))
-        return "ok", False
+        return "ok", False, ()
 
 
 def test_le_relais_ne_sert_que_l_allowlist():

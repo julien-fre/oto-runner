@@ -28,7 +28,7 @@ class _Transport:
                 for n in sorted(names or ())]
 
     def call(self, name, arguments):
-        return ("ok", False)
+        return ("ok", False, ())
 
 
 class _ProviderQuiCasse:

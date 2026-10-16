@@ -23,6 +23,7 @@ import os
 import sys
 from typing import Optional
 
+from .contenu_outil import Image
 from .mcp import McpSession
 
 _VERSION_PAR_DEFAUT = "2025-06-18"
@@ -74,8 +75,8 @@ class Relais:
             if nom not in self.outils:
                 return self._ok(message, self._contenu(
                     f"`{nom}` n'est pas autorisé pour ce travail.", erreur=True))
-            texte, erreur = self.session.call(nom, p.get("arguments") or {})
-            return self._ok(message, self._contenu(texte, erreur=erreur))
+            texte, erreur, images = self.session.call(nom, p.get("arguments") or {})
+            return self._ok(message, self._contenu(texte, erreur=erreur, images=images))
         return {"jsonrpc": "2.0", "id": message["id"],
                 "error": {"code": -32601, "message": f"méthode inconnue : {methode}"}}
 
@@ -84,8 +85,13 @@ class Relais:
         return {"jsonrpc": "2.0", "id": message["id"], "result": resultat}
 
     @staticmethod
-    def _contenu(texte: str, erreur: bool) -> dict:
-        return {"content": [{"type": "text", "text": texte}], "isError": erreur}
+    def _contenu(texte: str, erreur: bool, images: tuple[Image, ...] = ()) -> dict:
+        """Le résultat rendu au CLI : le texte, puis les images en blocs MCP —
+        le CLI les fait voir au modèle (#32 : elles s'arrêtaient au relais)."""
+        return {"content": [{"type": "text", "text": texte}, *(
+                    {"type": "image", "data": i.data, "mimeType": i.media_type}
+                    for i in images)],
+                "isError": erreur}
 
 
 def main() -> None:

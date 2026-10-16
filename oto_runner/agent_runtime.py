@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
 from .comptage import Compteur
+from .contenu_outil import Image, admettre, substitut
 from .llm_types import ToolCall, Turn  # noqa: F401 — le contrat du provider
 
 # ── Le plafond de la sortie d'outil SERVIE AU MODÈLE, en caractères ─────────
@@ -68,10 +69,10 @@ class ToolTransport(Protocol):
     """Ce que la boucle attend d'un transport d'outils : la face MCP du backend.
 
     `schemas(names)` → [{name, description, input_schema}] ; `call(name, args)` →
-    (texte, is_error). Les gates et la rédaction sont CÔTÉ SERVEUR — le transport
-    ne filtre rien, il transporte."""
+    (texte, is_error, images). Les gates et la rédaction sont CÔTÉ SERVEUR — le
+    transport ne filtre rien, il transporte."""
     def schemas(self, names: frozenset) -> list[dict]: ...
-    def call(self, name: str, arguments: dict) -> tuple[str, bool]: ...
+    def call(self, name: str, arguments: dict) -> tuple[str, bool, tuple[Image, ...]]: ...
 
 
 @dataclass(frozen=True)
@@ -251,8 +252,8 @@ def _trim(messages: list) -> list:
 
 
 def execute_tool(spec: AgentSpec, transport: ToolTransport,
-                 call: ToolCall) -> tuple[str, bool, bool]:
-    """UN appel d'outil → (texte, is_error, panne de transport). Ne lève jamais :
+                 call: ToolCall) -> tuple[str, bool, bool, tuple[Image, ...]]:
+    """UN appel d'outil → (texte, is_error, panne de transport, images). Ne lève jamais :
     une erreur d'outil est un résultat que le modèle lit pour se corriger.
     Fail-closed sur l'allowlist AVANT tout transport.
 
@@ -269,22 +270,22 @@ def execute_tool(spec: AgentSpec, transport: ToolTransport,
     if call.name not in spec.tools:
         return (f"Outil `{call.name}` indisponible pour ce run. "
                 f"Outils autorisés : {', '.join(sorted(spec.tools)) or '(aucun)'}.",
-                True, False)
+                True, False, ())
     if call.arguments_invalides is not None:
         # ⚠️ Des arguments qui ne sont pas un objet JSON : l'appel n'est NI exécuté NI
         # réparé. Le modèle lit pourquoi, et renvoie l'appel s'il le veut — par la
         # boucle et ses bornes, jamais par un rejeu caché du transport.
         return (f"Appel de `{call.name}` NON exécuté : ses arguments ne sont pas un "
                 f"objet JSON ({call.arguments_invalides[:200]!r}). Renvoie l'appel avec "
-                "un objet JSON valide.", True, False)
+                "un objet JSON valide.", True, False, ())
     try:
-        text, is_error = transport.call(call.name, call.arguments or {})
+        text, is_error, images = transport.call(call.name, call.arguments or {})
         if is_error and _est_transitoire(text):
             time.sleep(2)
-            text, is_error = transport.call(call.name, call.arguments or {})
+            text, is_error, images = transport.call(call.name, call.arguments or {})
     except Exception as e:  # noqa: BLE001 — l'erreur de la cible EST un résultat
-        return (f"Erreur de l'outil `{call.name}` : {e}", True, True)
-    return (text, is_error, False)
+        return (f"Erreur de l'outil `{call.name}` : {e}", True, True, ())
+    return (text, is_error, False, images)
 
 
 def _est_transitoire(texte: str) -> bool:
@@ -385,6 +386,8 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
     defaut: Optional[dict] = None
     n_tours = 0
     debut_deroule = time.monotonic()
+    # Les images déjà entrées dans le fil de CE déroulé (`contenu_outil.admettre`).
+    images_n = images_b64 = 0
 
     for _ in range(plafond + 1):
         # L'échéance murale, AVANT d'entamer le tour (cf. `AgentSpec.max_seconds`).
@@ -489,34 +492,53 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
             break
 
         results = []
+        persistes = []
         neutre = []
         for call in turn.tool_calls:
             started = time.monotonic()
-            text, is_error, transport_ko = execute_tool(spec, transport, call)
+            text, is_error, transport_ko, rendues = execute_tool(spec, transport, call)
             ms = int((time.monotonic() - started) * 1000)
             # Journalisé ENTIER, puis plafonné pour le modèle : le journal garde
             # ce que le transport a rendu, le modèle lit ce qu'il peut porter.
             pour_le_modele, tronque = _cap(text, limite_sortie)
+            # Les images entrent dans le fil sous les bornes du DÉROULÉ (le fil
+            # entier se renvoie à chaque tour) ; chaque image écartée est DITE.
+            images, refus = admettre(rendues, images_n, images_b64)
+            images_n += len(images)
+            images_b64 += sum(i.taille for i in images)
+            if refus:
+                pour_le_modele = "\n".join([pour_le_modele, *refus])
             note("outil", id=call.id, nom=call.name, arguments=call.arguments,
                  arguments_invalides=call.arguments_invalides,
                  ok=not is_error, transport_ko=transport_ko, duree_ms=ms,
                  texte=text, tronque_pour_le_modele=tronque,
                  # Ce que le modèle a RÉELLEMENT reçu (marqueur de troncature
                  # compris) : la question « qu'a-t-il lu ? » se lit au journal.
-                 servi_chars=len(pour_le_modele))
+                 servi_chars=len(pour_le_modele),
+                 images=[i.decrire() for i in images],
+                 images_refusees=len(refus))
             steps.append(AgentStep(tool=call.name, ok=not is_error, duration_ms=ms,
                                    error=text[:200] if is_error else None,
                                    transport_ko=transport_ko))
             neutre.append({"name": call.name, "ok": not is_error, "duration_ms": ms})
             results.append({"id": call.id, "text": pour_le_modele,
-                            "is_error": is_error})
+                            "is_error": is_error, "images": images})
+            # ⚠️ Le fil PERSISTÉ ne porte pas les images : le backend plafonne un
+            # tour à 256 000 caractères, qu'une seule image dépasse — l'appose
+            # échouerait et tuerait le run. Une reprise lit à leur place un
+            # substitut qui dit qu'elles étaient là.
+            persistes.append({"id": call.id, "is_error": is_error, "images": (),
+                              "text": "\n".join([pour_le_modele, *(
+                                  substitut(i.media_type, i.taille)["text"]
+                                  for i in images)])})
         # La FORME des résultats dans le fil appartient au provider (un message
         # user chez Anthropic, N messages role:tool chez OpenAI) — la boucle ne
         # la connaît pas, elle appose ce qu'on lui rend.
-        for tool_raw in provider.tool_messages(results):
+        for tool_raw, tool_persiste in zip(provider.tool_messages(results),
+                                           provider.tool_messages(persistes)):
             messages.append(tool_raw)
             if on_turn:
-                on_turn("tool", {"tool_calls": neutre}, tool_raw)
+                on_turn("tool", {"tool_calls": neutre}, tool_persiste)
         if turn.text:
             reply = turn.text
 

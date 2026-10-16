@@ -31,6 +31,7 @@ from typing import Optional
 import requests  # noqa: F401 — la forme des kwargs
 
 from .agent_runtime import serialize
+from .contenu_outil import Image, lire
 from .deadline import post_with_deadline
 from .descriptions import borne as _borne, reglage as _reglage_descriptions
 
@@ -278,9 +279,14 @@ class McpSession:
             self.schemas(frozenset())
         return self._props.get(name, frozenset())
 
-    def call(self, name: str, arguments: dict) -> tuple[str, bool]:
-        """UN appel d'outil → (texte pour le fil, is_error). Les jetons de contexte
-        sont posés ici — le modèle n'a pas à les connaître."""
+    def call(self, name: str, arguments: dict) -> tuple[str, bool, tuple[Image, ...]]:
+        """UN appel d'outil → (texte pour le fil, is_error, images). Les jetons de
+        contexte sont posés ici — le modèle n'a pas à les connaître.
+
+        ⚠️ TOUS les blocs du résultat sont lus (`contenu_outil.lire`) : on ne
+        gardait que le premier bloc texte, et l'image de `web_image` n'atteignait
+        jamais le modèle (#32). Un bloc que le runner ne sait pas transporter lève
+        `BlocNonGere` — l'appel échoue en le nommant, il n'est jamais amputé."""
         args = dict(arguments or {})
         for interdit in _JAMAIS_AU_MODELE.get(name, ()):
             if args.pop(interdit, None) is not None:
@@ -355,24 +361,24 @@ class McpSession:
                     f"({str((d or {}).get('error') or d)[:200]}) — le job échoue "
                     "pour être rejoué")
         res = (d or {}).get("result") or {}
+        texte, images = lire(res.get("content"))
         if res.get("isError"):
-            blocs = res.get("content") or []
-            texte = "\n".join(b.get("text", "") for b in blocs
-                              if isinstance(b, dict)) or serialize(res)
-            return texte, True
+            return texte or serialize(res), True, images
         if res.get("structuredContent") is not None:
-            return serialize(res["structuredContent"]), False
-        for bloc in res.get("content") or []:
-            if isinstance(bloc, dict) and bloc.get("type") == "text":
-                return bloc.get("text", ""), False
+            return serialize(res["structuredContent"]), False, images
+        if res.get("content"):
+            return texte, False, images
         err = d.get("error")
         if err:
-            return serialize(err), True
-        return serialize(d), False
+            return serialize(err), True, ()
+        return serialize(d), False, ()
 
     def outil(self, name: str, arguments: Optional[dict] = None) -> dict:
         """Appel direct hors boucle (run_start, run_finish…) — rend le payload."""
-        texte, is_error = self.call(name, arguments or {})
+        texte, is_error, images = self.call(name, arguments or {})
+        if images:
+            raise RuntimeError(f"{name} : {len(images)} image(s) rendue(s) à un appel "
+                               "direct, qui ne lit que du JSON")
         try:
             data = json.loads(texte)
         except Exception:  # noqa: BLE001

@@ -115,10 +115,24 @@ def assistant_message(turn: Turn) -> dict:
 def tool_messages(results: list[dict]) -> list[dict]:
     """Les résultats d'outils d'UN tour → messages de fil. Anthropic : TOUS dans
     UN message user (les scinder apprend au modèle à cesser de paralléliser).
-    `results` = [{id, text, is_error}]."""
+    `results` = [{id, text, is_error, images}]."""
     return [{"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": r["id"],
-         "content": r["text"], "is_error": r["is_error"]} for r in results]}]
+         "content": _contenu_resultat(r["text"], r["images"]),
+         "is_error": r["is_error"]} for r in results]}]
+
+
+def _contenu_resultat(texte: str, images) -> object:
+    """Le `content` d'un `tool_result` : une chaîne quand il n'y a que du texte
+    (la forme d'avant, inchangée), sinon une liste de blocs — l'API accepte des
+    blocs `image` en base64 dans un résultat d'outil."""
+    if not images:
+        return texte
+    blocs: list = [{"type": "text", "text": texte}] if texte else []
+    return blocs + [{"type": "image", "source": {"type": "base64",
+                                                 "media_type": i.media_type,
+                                                 "data": i.data}}
+                    for i in images]
 
 
 def format_tools(schemas: list[dict]) -> list[dict]:

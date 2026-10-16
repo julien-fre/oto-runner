@@ -54,7 +54,7 @@ class FauxMcp:
         return []
 
     def call(self, name, arguments):
-        return "ok", False
+        return "ok", False, ()
 
 
 def _job(kind, run_id=None):
