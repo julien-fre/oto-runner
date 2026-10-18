@@ -335,7 +335,7 @@ def payload(spec: FleetSpec) -> dict:
                .replace("{filter}", json.dumps(spec.filter, ensure_ascii=False))
                # La date du jour, lue quand le travail se construit : l'agent n'en reçoit
                # aucune autre, et il recopiait celle des exemples de sa procédure.
-               .replace("{date_du_jour}", date.today().strftime("%d/%m/%Y")))
+               .replace("{date_du_jour}", date.today().strftime("%Y-%m-%d")))
     return {"procedure": spec.procedure, "tools": list(spec.tools),
             "project_id": spec.project, "org_id": spec.org,
             "namespace": spec.namespace,

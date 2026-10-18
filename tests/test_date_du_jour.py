@@ -21,7 +21,7 @@ def _consigne(tmp_path, texte):
 
 def test_la_date_du_jour_remplace_le_marqueur(tmp_path):
     assert (_consigne(tmp_path, "Nous sommes le {date_du_jour}.")
-            == f"Nous sommes le {date.today().strftime('%d/%m/%Y')}.")
+            == f"Nous sommes le {date.today().strftime('%Y-%m-%d')}.")
 
 
 def test_sans_marqueur_la_consigne_reste_identique(tmp_path):

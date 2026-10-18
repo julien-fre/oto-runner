@@ -74,11 +74,11 @@ class Relais:
             nom = p.get("name") or ""
             if nom not in self.outils:
                 return self._ok(message, self._contenu(
-                    f"`{nom}` n'est pas autorisé pour ce travail.", erreur=True))
+                    f"`{nom}` is not allowed for this job.", erreur=True))
             texte, erreur, images = self.session.call(nom, p.get("arguments") or {})
             return self._ok(message, self._contenu(texte, erreur=erreur, images=images))
         return {"jsonrpc": "2.0", "id": message["id"],
-                "error": {"code": -32601, "message": f"méthode inconnue : {methode}"}}
+                "error": {"code": -32601, "message": f"unknown method: {methode}"}}
 
     @staticmethod
     def _ok(message: dict, resultat: dict) -> dict:
