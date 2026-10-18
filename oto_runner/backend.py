@@ -222,7 +222,7 @@ class Backend:
     def claim(self, lease_seconds: int = 600, depot: str = "",
               org_key_only: bool = False,
               org_ids: Optional[list] = None,
-              engine: str = "") -> Optional[dict]:
+              engine: str = "", meters_usage: bool = False) -> Optional[dict]:
         """Réserve un travail — et NOMME le dépôt de clé qu'on sait consommer.
 
         Le backend y répond par `model_key` quand l'org du travail a déposé cette
@@ -262,6 +262,12 @@ class Backend:
         # ferme (option d'org `claude_farm`) ; la boucle n'envoie jamais le champ.
         if engine:
             corps["engine"] = engine
+        # ⚠️ `meters_usage` (18/10/2026) n'est envoyé QUE par un worker
+        # `OTO_RUNNER_METERS_USAGE=1`, même leçon : il exige un backend qui le déclare.
+        # C'est la promesse de rapporter CHAQUE appel au modèle (`meter`) ; seul un
+        # worker qui la fait reçoit une clé partagée (plateforme ou tenant).
+        if meters_usage:
+            corps["meters_usage"] = True
         return self._post("/api/me/runner/jobs", corps).get("job")
 
     def enqueue(self, kind: str, payload: dict,
@@ -410,6 +416,15 @@ class Backend:
     def bind_run(self, job_id: int, run_id: str) -> None:
         self._post("/api/me/runner/jobs",
                    {"op": "bind_run", "job_id": job_id, "run_id": run_id})
+
+    def meter(self, job_id: int, turn: int, usage: dict) -> dict:
+        """L'usage d'UN appel au modèle, rapporté AVANT de continuer (18/10/2026) :
+        le serveur l'inscrit au journal quand une clé partagée paie ce travail. Un
+        refus lève — et le travail s'arrête : il ne continue pas sur une clé qu'on
+        refacture sans que son coût soit inscrit."""
+        return self._post("/api/me/runner/jobs",
+                          {"op": "meter", "job_id": job_id, "turn": turn,
+                           "result": usage})
 
     def extend(self, job_id: int, lease_seconds: int = 600) -> None:
         self._post("/api/me/runner/jobs",

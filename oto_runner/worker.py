@@ -185,6 +185,50 @@ def _cles_clients_seules() -> bool:
     return (os.environ.get(_ENV_CLES_CLIENTS) or "").strip() == "1"
 
 
+#: La mesure PAR APPEL (18/10/2026) : le worker promet au claim (`meters_usage`) de
+#: rapporter chaque appel au modèle avant de continuer, et seul un tel worker reçoit une
+#: clé PARTAGÉE (plateforme ou tenant), refacturée à l'org. ⚠️ Exige un backend qui
+#: déclare `meters_usage` au claim : posé face à un backend plus ancien, CHAQUE
+#: réservation partirait en `400 : unknown_fields`.
+_ENV_MESURE = "OTO_RUNNER_METERS_USAGE"
+
+
+def _mesure_par_appel() -> bool:
+    return (os.environ.get(_ENV_MESURE) or "").strip() == "1"
+
+
+def _mesureur(file, job: dict):
+    """Le rapport de CHAQUE appel au modèle, quand le serveur le demande pour ce travail
+    (`meter_usage`, une clé partagée le paie) — sinon None.
+
+    Rejoué sur une panne de transport (le serveur ignore un tour déjà inscrit) ; un
+    REFUS nommé (usage non déclaré, modèle sans tarif, travail repris) ne se rejoue pas.
+    Au troisième échec, ou sur un refus, il LÈVE : le déroulé s'arrête plutôt que de
+    continuer sur une clé que l'on refacture sans que son coût soit inscrit."""
+    if not job.get("meter_usage"):
+        return None
+
+    def mesurer(tour: int, usage: dict, modele) -> None:
+        charge = {"model": modele,
+                  "usage_input": usage.get("input_tokens"),
+                  "usage_output": usage.get("output_tokens"),
+                  "usage_cache_write": usage.get("cache_creation_input_tokens"),
+                  "usage_cache_read": usage.get("cache_read_input_tokens")}
+        for essai in range(3):
+            try:
+                file.meter(job["id"], tour, charge)
+                return
+            except BackendError as e:
+                if (e.status is not None and 400 <= e.status < 500) or essai == 2:
+                    raise RuntimeError(
+                        f"mesure du tour {tour} refusée ({e}) : le déroulé s'arrête, "
+                        "son coût ne serait pas inscrit") from e
+                logger.warning("meter %s tour %s (essai %s) : %s", job["id"], tour,
+                               essai + 1, e)
+                time.sleep(2 * (essai + 1))
+    return mesurer
+
+
 #: Les orgs que CE worker sert, et elles seules (`12,34`) — pour essayer un moteur sur une
 #: org avant de le donner au parc. Absent = toutes, comme avant. ⚠️ Exige un backend qui
 #: déclare `org_ids` au claim : posé face à un backend plus ancien, CHAQUE réservation
@@ -634,7 +678,8 @@ def _traiter(backend: Backend, job: dict, provider,
     else:
         res = agent_runtime.run(spec, mcp, provider, prompt=prompt,
                                 history=historique, on_turn=apposer, api_key=cle,
-                                on_event=on_event, workspace=workspace)
+                                on_event=on_event, workspace=workspace,
+                                on_usage=_mesureur(file, job))
 
     # ⚠️ Le worker ne juge PAS ce que l'agent a produit. Il ne sait pas ce
     # qu'écrire veut dire, ni où l'agent devait écrire, ni si ne rien écrire
@@ -795,6 +840,9 @@ def main() -> None:
     # Échoue FORT au boot si le worker ne peut payer aucun tour, pas au 1er job.
     _verifier_cle_au_demarrage(provider, depot)
     cles_seules = _cles_clients_seules()
+    # ⚠️ Un moteur ONE-SHOT (la ferme, Conversations) ne voit pas chaque appel : il ne
+    # promet jamais de les mesurer, quoi que dise l'environnement.
+    mesure = _mesure_par_appel() and not getattr(provider, "ONE_SHOT", False)
     orgs = _orgs_servies()   # lu au boot : une valeur illisible échoue ICI
     # Le moteur déclaré au claim : la ferme seule en déclare un (`agent_ferme.ENGINE`).
     engine = getattr(provider, "ENGINE", "")
@@ -819,7 +867,8 @@ def main() -> None:
             job = backend.claim(lease_seconds=lease_s, depot=depot,
                                 **({"org_key_only": True} if cles_seules else {}),
                                 **({"org_ids": orgs} if orgs else {}),
-                                **({"engine": engine} if engine else {}))
+                                **({"engine": engine} if engine else {}),
+                                **({"meters_usage": True} if mesure else {}))
         except BackendError as e:
             logger.warning("claim : %s", e)
             time.sleep(_POLL_S)

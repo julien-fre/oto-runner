@@ -198,6 +198,11 @@ OnTurn = Callable[[str, dict, dict], None]
 # qui manquait pour relire un passage après coup : le fil ne garde que la sortie
 # tronquée, le résultat déclaré ne garde que des comptes. None = pas de journal.
 OnEvent = Callable[[str, dict], None]
+# `on_usage(tour, usage, modele)` : la MESURE d'un appel au modèle, appelée juste après
+# lui et avant tout le reste (18/10/2026) — `usage` sous les noms du fournisseur
+# (`input_tokens`…), `tour` compté depuis 0 dans ce déroulé. Elle LÈVE pour arrêter le
+# déroulé. None = rien à mesurer (la clé de l'org paie).
+OnUsage = Callable[[int, dict, Optional[str]], None]
 
 
 def max_tool_output() -> int:
@@ -300,7 +305,8 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
         history: Optional[list] = None, on_turn: Optional[OnTurn] = None,
         api_key: Optional[str] = None,
         on_event: Optional[OnEvent] = None,
-        workspace: Optional[str] = None) -> AgentResult:
+        workspace: Optional[str] = None,
+        on_usage: Optional[OnUsage] = None) -> AgentResult:
     """La boucle, plus **ce qu'elle a déjà dépensé quand elle casse**.
 
     ⚠️ Les jetons d'un déroulé MORT (13/09/2026) : ils ont été dépensés chez le
@@ -318,7 +324,7 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
     try:
         return _run(spec, transport, provider, compte, prompt=prompt,
                     history=history, on_turn=on_turn, api_key=api_key,
-                    on_event=on_event, workspace=workspace)
+                    on_event=on_event, workspace=workspace, on_usage=on_usage)
     except BaseException as e:
         # L'usage PAR POSTE tel que le comptage le rend (`None` = non déclaré sur au
         # moins un tour) et la couverture qui le fonde : un déroulé mort se lit comme
@@ -335,7 +341,8 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
          history: Optional[list] = None, on_turn: Optional[OnTurn] = None,
          api_key: Optional[str] = None,
          on_event: Optional[OnEvent] = None,
-         workspace: Optional[str] = None) -> AgentResult:
+         workspace: Optional[str] = None,
+         on_usage: Optional[OnUsage] = None) -> AgentResult:
     """La boucle : tours de modèle et d'outils jusqu'à conclusion ou plafond.
 
     `history` = les `provider_raw` du fil, rejoués dans l'ordre (continuation d'un
@@ -420,6 +427,13 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         # de déroulé a servi les deux, et c'est le second qu'on retrouvera.
         servi = turn.model or servi
         compte["servi"], compte["pas"] = servi, len(steps)
+        # ⚠️ La MESURE ensuite, avant tout ce que le tour déclenche (18/10/2026) : sur
+        # une clé partagée, chaque appel s'inscrit au serveur avant le suivant. Un
+        # rapport refusé LÈVE, et le déroulé s'arrête là. ⚠️ APRÈS le compteur et le modèle servi : le
+        # tour refusé fait partie de l'usage que `run` accroche à l'exception, et que
+        # la conclusion rapporte — le serveur l'inscrit alors en reste.
+        if on_usage:
+            on_usage(n_tours - 1, dict(turn.usage or {}), turn.model or spec.model)
         note("modele", texte=turn.text, stop_reason=turn.stop_reason,
              appels=[{"id": c.id, "nom": c.name, "arguments": c.arguments}
                      for c in turn.tool_calls],
