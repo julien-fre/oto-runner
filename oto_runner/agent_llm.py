@@ -52,6 +52,13 @@ def max_tokens() -> int:
         return DEFAULT_MAX_TOKENS
 
 
+def plafond_de_sortie(max_output_tokens: Optional[int], effort: Optional[str] = None) -> int:
+    """Le `max_tokens` d'un appel : celui que porte le TRAVAIL, à défaut celui du worker.
+    Le même nombre part au fournisseur et à la réservation du budget (`on_reserve`).
+    `effort` : la signature de `agent_llm_openai.plafond_de_sortie` ; ici sans effet."""
+    return max_output_tokens or max_tokens()
+
+
 def depot() -> str:
     """Le nom du dépôt de clé que ce provider sait consommer (voir `worker`).
 
@@ -285,7 +292,7 @@ def complete(*, system: str, messages: list, tools: list[dict],
     nom = modele or model()
     effort_retenu = effort or effort_hote()
     # Calculé UNE fois : il part au fournisseur ET au journal, porté par le tour.
-    plafond = max_output_tokens or max_tokens()
+    plafond = plafond_de_sortie(max_output_tokens)
     kwargs: dict = {
         "model": nom,
         # Le plafond que porte le TRAVAIL (le catalogue du backend le déclare par modèle),

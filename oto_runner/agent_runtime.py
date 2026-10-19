@@ -198,6 +198,16 @@ OnTurn = Callable[[str, dict, dict], None]
 # qui manquait pour relire un passage après coup : le fil ne garde que la sortie
 # tronquée, le résultat déclaré ne garde que des comptes. None = pas de journal.
 OnEvent = Callable[[str, dict], None]
+# `on_reserve(tour, max_tokens)` : la RÉSERVATION d'un appel au modèle au budget du
+# serveur, appelée juste AVANT lui (19/10/2026) — `max_tokens` = le plafond de sortie
+# qui part au fournisseur, `tour` compté depuis 0 dans ce déroulé. Elle LÈVE pour
+# arrêter le déroulé : l'appel ne part pas. None = rien à réserver (la clé de l'org paie).
+OnReserve = Callable[[int, int], None]
+# `on_usage(tour, usage, modele)` : le RÈGLEMENT d'un appel au modèle, appelé juste après
+# lui et avant tout le reste (18/10/2026) — `usage` sous les noms du fournisseur
+# (`input_tokens`…), même `tour` que sa réservation. Il LÈVE pour arrêter le déroulé.
+# None = rien à régler (la clé de l'org paie).
+OnUsage = Callable[[int, dict, Optional[str]], None]
 
 
 def max_tool_output() -> int:
@@ -300,7 +310,9 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
         history: Optional[list] = None, on_turn: Optional[OnTurn] = None,
         api_key: Optional[str] = None,
         on_event: Optional[OnEvent] = None,
-        workspace: Optional[str] = None) -> AgentResult:
+        workspace: Optional[str] = None,
+        on_reserve: Optional[OnReserve] = None,
+        on_usage: Optional[OnUsage] = None) -> AgentResult:
     """La boucle, plus **ce qu'elle a déjà dépensé quand elle casse**.
 
     ⚠️ Les jetons d'un déroulé MORT (13/09/2026) : ils ont été dépensés chez le
@@ -318,7 +330,8 @@ def run(spec: AgentSpec, transport: ToolTransport, provider,
     try:
         return _run(spec, transport, provider, compte, prompt=prompt,
                     history=history, on_turn=on_turn, api_key=api_key,
-                    on_event=on_event, workspace=workspace)
+                    on_event=on_event, workspace=workspace, on_reserve=on_reserve,
+                    on_usage=on_usage)
     except BaseException as e:
         # L'usage PAR POSTE tel que le comptage le rend (`None` = non déclaré sur au
         # moins un tour) et la couverture qui le fonde : un déroulé mort se lit comme
@@ -335,7 +348,9 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
          history: Optional[list] = None, on_turn: Optional[OnTurn] = None,
          api_key: Optional[str] = None,
          on_event: Optional[OnEvent] = None,
-         workspace: Optional[str] = None) -> AgentResult:
+         workspace: Optional[str] = None,
+         on_reserve: Optional[OnReserve] = None,
+         on_usage: Optional[OnUsage] = None) -> AgentResult:
     """La boucle : tours de modèle et d'outils jusqu'à conclusion ou plafond.
 
     `history` = les `provider_raw` du fil, rejoués dans l'ordre (continuation d'un
@@ -401,6 +416,12 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         # ⚠️ Le tour est CHRONOMÉTRÉ : sans ça, un journal ne dit pas si un tour a
         # pris deux secondes ou cinq minutes — et c'est la première question qu'on
         # se pose devant un travail mort sur un délai d'attente du fournisseur.
+        # ⚠️ La RÉSERVATION d'abord (19/10/2026) : sur une clé partagée, l'appel ne part
+        # que si le budget du serveur couvre son plafond de sortie. Un refus LÈVE, et le
+        # déroulé s'arrête avant l'appel.
+        if on_reserve:
+            on_reserve(n_tours, provider.plafond_de_sortie(spec.max_output_tokens,
+                                                           spec.effort))
         debut_tour = time.monotonic()
         turn = provider.complete(system=spec.system, messages=messages,
                                  tools=schemas, api_key=api_key,
@@ -420,6 +441,14 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         # de déroulé a servi les deux, et c'est le second qu'on retrouvera.
         servi = turn.model or servi
         compte["servi"], compte["pas"] = servi, len(steps)
+        # ⚠️ Le RÈGLEMENT ensuite, avant tout ce que le tour déclenche (18/10/2026) : sur
+        # une clé partagée, chaque appel se règle au serveur avant le suivant. Un
+        # rapport refusé LÈVE, et le déroulé s'arrête là. ⚠️ APRÈS le compteur et le
+        # modèle servi : le tour refusé fait partie de l'usage que `run` accroche à
+        # l'exception. Le serveur, lui, règle ce tour au montant réservé à la
+        # conclusion.
+        if on_usage:
+            on_usage(n_tours - 1, dict(turn.usage or {}), turn.model or spec.model)
         note("modele", texte=turn.text, stop_reason=turn.stop_reason,
              appels=[{"id": c.id, "nom": c.name, "arguments": c.arguments}
                      for c in turn.tool_calls],

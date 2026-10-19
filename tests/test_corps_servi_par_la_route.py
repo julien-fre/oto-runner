@@ -64,6 +64,11 @@ _DECLARES_PAR_LA_ROUTE = {
     # un worker de ferme (`agent_ferme.ENGINE`) : déployer le backend qui le déclare
     # AVANT ce runner, sinon le worker de ferme seul répond `unknown_fields`.
     "engine",
+    # oto-backend, clé partagée au budget d'unités (18-19/10/2026). ⚠️ `meters_usage`
+    # n'est ENVOYÉ que par un worker `OTO_RUNNER_METERS_USAGE=1`, `turn` par `reserve`
+    # et `meter`, `max_tokens` par `reserve` : déployer le backend qui les déclare AVANT
+    # de poser la variable.
+    "meters_usage", "turn", "max_tokens",
 }
 
 
@@ -85,3 +90,26 @@ def test_sans_depot_le_champ_ne_part_pas(_client, monkeypatch):
     vu = _corps_de(_client, lambda: _client.claim(lease_seconds=600, depot=""),
                    monkeypatch)
     assert set(vu["corps"]) == {"op", "lease_seconds"}
+
+
+def test_le_rapport_d_un_appel_n_envoie_que_des_champs_declares(_client, monkeypatch):
+    usage = {"model": "claude-sonnet-5", "usage_input": 1, "usage_output": 2,
+             "usage_cache_write": 0, "usage_cache_read": 3}
+    vu = _corps_de(_client, lambda: _client.meter(9, 4, usage), monkeypatch)
+    assert not set(vu["corps"]) - _DECLARES_PAR_LA_ROUTE
+    assert vu["corps"] == {"op": "meter", "job_id": 9, "turn": 4, "result": usage}
+
+
+def test_la_promesse_de_mesurer_ne_part_que_si_elle_est_faite(_client, monkeypatch):
+    sans = _corps_de(_client, lambda: _client.claim(lease_seconds=600, depot="anthropic"),
+                     monkeypatch)
+    assert "meters_usage" not in sans["corps"]
+    avec = _corps_de(_client, lambda: _client.claim(lease_seconds=600, depot="anthropic",
+                                                    meters_usage=True), monkeypatch)
+    assert avec["corps"]["meters_usage"] is True
+
+
+def test_la_reservation_d_un_appel_n_envoie_que_des_champs_declares(_client, monkeypatch):
+    vu = _corps_de(_client, lambda: _client.reserve(9, 4, 8192), monkeypatch)
+    assert not set(vu["corps"]) - _DECLARES_PAR_LA_ROUTE
+    assert vu["corps"] == {"op": "reserve", "job_id": 9, "turn": 4, "max_tokens": 8192}
