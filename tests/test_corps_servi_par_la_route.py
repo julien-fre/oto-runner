@@ -69,6 +69,10 @@ _DECLARES_PAR_LA_ROUTE = {
     # et `meter`, `max_tokens` par `reserve` : déployer le backend qui les déclare AVANT
     # de poser la variable.
     "meters_usage", "turn", "max_tokens",
+    # oto-backend, sonde du forfait (21/10/2026). ⚠️ `forfait_sonde` n'est ENVOYÉ que par
+    # un worker `OTO_RUNNER_SONDE_FORFAIT=1` (et `op=forfait` avec lui) : déployer le
+    # backend qui les déclare AVANT de poser la variable.
+    "forfait_sonde",
 }
 
 
@@ -113,3 +117,19 @@ def test_la_reservation_d_un_appel_n_envoie_que_des_champs_declares(_client, mon
     vu = _corps_de(_client, lambda: _client.reserve(9, 4, 8192), monkeypatch)
     assert not set(vu["corps"]) - _DECLARES_PAR_LA_ROUTE
     assert vu["corps"] == {"op": "reserve", "job_id": 9, "turn": 4, "max_tokens": 8192}
+
+
+def test_la_promesse_de_sonder_ne_part_que_si_elle_est_faite(_client, monkeypatch):
+    sans = _corps_de(_client, lambda: _client.claim(lease_seconds=600, depot="claude_subscription"),
+                     monkeypatch)
+    assert "forfait_sonde" not in sans["corps"]
+    avec = _corps_de(_client, lambda: _client.claim(lease_seconds=600, depot="claude_subscription",
+                                                    forfait_sonde=True), monkeypatch)
+    assert avec["corps"]["forfait_sonde"] is True
+
+
+def test_le_verdict_du_forfait_n_envoie_que_des_champs_declares(_client, monkeypatch):
+    vu = _corps_de(_client, lambda: _client.forfait(9, {"etat": "allowed"}), monkeypatch)
+    assert not set(vu["corps"]) - _DECLARES_PAR_LA_ROUTE
+    assert vu["corps"] == {"op": "forfait", "job_id": 9,
+                           "result": {"abonnement": {"etat": "allowed"}}}

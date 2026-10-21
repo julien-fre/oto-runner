@@ -117,6 +117,23 @@ def resolve_key() -> str:
     return ""
 
 
+def rapport_du_forfait(forfait: Optional[dict]) -> Optional[dict]:
+    """Le `rate_limit_info` du CLI tel que le backend le lit (`_abonnement.noter_rapport`).
+
+    `fenetre` / `echeance` : la fenêtre que le fournisseur NOMME (`rateLimitType`) et son
+    échéance (`resetsAt`). Sur un refus, c'est elle qui a mordu — sans elles, le backend
+    attendait l'échéance la plus lointaine de toutes les fenêtres (sept jours pour un
+    refus sur cinq heures)."""
+    if not forfait:
+        return None
+    rapport = {"etat": forfait.get("status"), "fenetres": forfait.get("unifiedWindows")}
+    if forfait.get("rateLimitType"):
+        rapport["fenetre"] = forfait["rateLimitType"]
+    if isinstance(forfait.get("resetsAt"), (int, float)):
+        rapport["echeance"] = forfait["resetsAt"]
+    return rapport
+
+
 def _modele_du_cli(modele: str) -> str:
     """`sub:opus` → `opus` : le CLI connaît les alias, le catalogue les préfixe."""
     if not modele.startswith(_PREFIXE_MODELE):
@@ -325,9 +342,7 @@ def lire_flux(evenements, on_event=None, prolonger: Optional[Callable[[], None]]
         # `blocked`, comme à `max_tokens` sur la boucle ordinaire.
         return AgentResult(reply="", steps=steps, stopped=arret,
                            usage=compteur.usage_connu(), model=init.get("model"),
-                           abonnement=({"etat": forfait.get("status"),
-                                        "fenetres": forfait.get("unifiedWindows")}
-                                       if forfait else None))
+                           abonnement=rapport_du_forfait(forfait))
     if resume.get("connecte") is False:
         # Pas une exception : c'est une CONCLUSION que le backend doit lire
         # (`deconnecte` → la personne passe `needs_login`, ses travaux attendent).
@@ -343,9 +358,7 @@ def lire_flux(evenements, on_event=None, prolonger: Optional[Callable[[], None]]
                                         "erreur": resume.get("erreur")})
         return AgentResult(reply="", steps=steps, stopped="max_seconds",
                            usage=compteur.usage_connu(), model=init.get("model"),
-                           abonnement=({"etat": forfait.get("status"),
-                                        "fenetres": forfait.get("unifiedWindows")}
-                                       if forfait else None))
+                           abonnement=rapport_du_forfait(forfait))
     if resultat is None:
         raise RuntimeError(f"le CLI n'a rendu aucun résultat ({resume.get('erreur') or 'flux coupé'})")
     if init.get("apiKeySource") != source_attendue:
@@ -360,9 +373,7 @@ def lire_flux(evenements, on_event=None, prolonger: Optional[Callable[[], None]]
                                         "fin": resultat.get("subtype")})
         return AgentResult(reply=resultat.get("result") or "", steps=steps, stopped=borne,
                            usage=usage, par_modele=par_modele, model=init.get("model"),
-                           abonnement=({"etat": forfait.get("status"),
-                                        "fenetres": forfait.get("unifiedWindows")}
-                                       if forfait else None))
+                           abonnement=rapport_du_forfait(forfait))
     erreur_du_cli = bool(resultat.get("is_error"))
     return AgentResult(
         reply=resultat.get("result") or "",
@@ -376,8 +387,7 @@ def lire_flux(evenements, on_event=None, prolonger: Optional[Callable[[], None]]
         usage=usage,
         par_modele=par_modele,
         model=init.get("model"),
-        abonnement=({"etat": forfait.get("status"), "fenetres": forfait.get("unifiedWindows")}
-                    if forfait else None))
+        abonnement=rapport_du_forfait(forfait))
 
 
 def run_once(*, instructions: str, inputs: str, tools, api_key: Optional[str] = None,
@@ -425,6 +435,45 @@ def run_once(*, instructions: str, inputs: str, tools, api_key: Optional[str] = 
         return lire_flux(_jusqu_a(lignes, echeance, horloge), on_event=on_event,
                          prolonger=prolonger, apposer=apposer, horloge=horloge,
                          max_tokens=max_tokens, echeance=echeance)
+
+
+#: La SONDE du forfait (`verifier_forfait`) : un tour, sans outil, sur le plus petit modèle.
+VERIFIE_LE_FORFAIT = True   # le worker sonde avant de lancer (cf. worker._sonder_le_forfait)
+_SONDE_MODELE = "haiku"
+_SONDE_S = 60
+
+
+def verifier_forfait(sandbox: Optional[str], *, attendre=time.sleep) -> Optional[dict]:
+    """Ce que le fournisseur dit du forfait MAINTENANT, avant de lancer un travail.
+
+    Un tour minuscule dans le sandbox du porteur (`prompt` d'un mot, sans outil ni
+    relais MCP, `max_turns` 1), dont on ne lit que le `rate_limit_event`. Il coûte
+    quelques jetons du forfait ; il évite qu'une pause posée par un rapport ancien —
+    ou faux — fige le forfait jusqu'à sa réinitialisation, puisque sans travail servi
+    aucun rapport ne venait la corriger.
+
+    Rend le rapport (`rapport_du_forfait`), ou `None` quand le flux n'en porte pas :
+    alors on ne sait rien, et le travail part comme avant. ⚠️ Un refus ne se DÉDUIT
+    jamais d'un message d'erreur — seul l'état que le fournisseur annonce compte."""
+    if not sandbox:
+        return None
+    resolve_key()
+    corps = {"prompt": "ok", "model": _SONDE_MODELE, "max_seconds": _SONDE_S,
+             **champ_des_tours(1)}
+    url = f"{os.environ[_ENV_AGENT].rstrip('/')}/api/sandboxes/{sandbox}/runs"
+    entetes = {"Authorization": f"Bearer {os.environ[_ENV_JETON]}",
+               "Accept": "application/x-ndjson"}
+    forfait = None
+    with poster_le_run(url, corps, entetes, _SONDE_S, attendre=attendre) as r:
+        if r.status_code != 200:
+            raise RuntimeError(f"agent de la ferme (sonde) : {r.status_code} {r.text[:300]}")
+        for ligne in r.iter_lines(decode_unicode=True):
+            if not ligne:
+                continue
+            ev = json.loads(ligne)
+            if ev.get("type") == "rate_limit_event":
+                forfait = ev.get("rate_limit_info")
+    return rapport_du_forfait(forfait)
 
 
 def champ_des_tours(max_turns: Optional[int]) -> dict:
