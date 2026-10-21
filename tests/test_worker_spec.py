@@ -34,6 +34,19 @@ def test_le_cadre_est_celui_du_worker_SEUL():
         "aucun travail ne doit hériter d'un cadre qu'on ne lui a pas donné")
 
 
+def test_la_langue_est_celle_de_l_instruction_sans_rien_traduire():
+    """Le cadre devient le prompt système du CLI : écrit en français, il faisait conclure
+    en français un agent servi à une personne anglophone. Il est en anglais et DIT la
+    langue : celle de l'instruction, compte rendu compris — l'anglais seulement à défaut,
+    pour qu'un agent qui reçoit une instruction en français réponde en français. Ce
+    qu'une personne a écrit ne se traduit pas."""
+    cadre = " ".join(worker._SYSTEM_FRAME.split())
+    assert cadre.startswith("You are carrying out a hosted run on the oto platform.")
+    assert ("Write in the language of the instruction you were given, your report "
+            "included — in English if that is unclear.") in cadre
+    assert "Never translate what a person wrote: names, quoted messages, fixed texts." in cadre
+
+
 def test_l_instruction_de_lecture_part_telle_quelle_et_rien_n_est_preinjecte(monkeypatch):
     vu: dict = {}
 
