@@ -797,11 +797,13 @@ def _un_travail(backend: Backend, job: dict, provider, file=None) -> None:
     except IdentiteInvalide as e:
         # ⚠️ On ne conclut PAS : le serveur a déjà marqué ce travail en échec à
         # la réservation. `complete` rendrait une erreur de bail — un bruit qui
-        # ferait chercher un problème de file là où il y a un problème de DROIT.
+        # ferait chercher un problème de file là où le serveur a refusé.
+        # ⚠️ Le message dit CE QUI S'EST PASSÉ, et la raison du serveur, sans en
+        # présumer la cause : le refus n'est pas toujours un droit perdu (une clé
+        # de modèle absente, un modèle non déclaré…). La raison dit déjà quoi faire.
         journal.erreur(j, e)
-        logger.error("job %s NON exécuté — %s. Ce travail ne repartira pas : "
-                     "il faut soit rendre son droit au demandeur, soit le "
-                     "reprogrammer sous une autre identité. Journal : %s",
+        logger.error("job %s NON exécuté — refusé par le serveur à la réservation : "
+                     "%s. Ce travail ne repartira pas. Journal : %s",
                      job.get("id"), e, journal.relu(j.chemin))
     except Exception as e:  # noqa: BLE001 — l'échec d'un job n'arrête pas la batterie
         # ⚠️ La cause d'abord, ENTIÈRE (type, message, pile) : rien de ce qui

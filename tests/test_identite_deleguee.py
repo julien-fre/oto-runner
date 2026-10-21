@@ -77,3 +77,20 @@ def test_un_refus_d_identite_arrete_le_travail_sans_le_toucher(monkeypatch):
     with pytest.raises(W.IdentiteInvalide) as e:
         W._traiter(object(), job, object())
     assert "n'existe plus" in str(e.value), "la RAISON doit remonter, pas juste l'échec"
+
+
+def test_un_refus_du_serveur_se_journalise_sans_en_presumer_la_cause(caplog):
+    """Le refus à la réservation n'est pas toujours un droit perdu : ici, une clé de
+    modèle absente. Le message disait « rendre son droit au demandeur, ou le
+    reprogrammer sous une autre identité » — une cause présumée, fausse dans ce cas.
+    Il dit ce qui s'est passé et rend la raison du serveur, telle quelle."""
+    import logging
+    from tests.test_worker_reprise import FauxBackend, _job
+    raison = "ce travail demande un modèle `anthropic` — Dépose une clé `anthropic`."
+    job = {**_job("start"), "delegation_refusee": raison}
+    with caplog.at_level(logging.ERROR):
+        W._un_travail(FauxBackend(), job, object())
+    (message,) = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert "NON exécuté" in message and "refusé par le serveur" in message
+    assert raison in message, "la RAISON du serveur remonte, entière"
+    assert "droit" not in message and "identité" not in message, message
