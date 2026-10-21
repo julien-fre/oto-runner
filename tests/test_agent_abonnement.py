@@ -39,9 +39,61 @@ def test_un_sandbox_deconnecte_conclut_en_echec_nomme_et_le_dit_au_backend():
     assert conclusion.echec_nomme(res) == "fin_anormale (sandbox_deconnecte)"
 
 
-def test_une_erreur_du_cli_est_une_fin_anormale():
+def _erreur_api(type_erreur, texte):
+    """Le message que le CLI fabrique d'une erreur d'API : `SDKAssistantMessage.error`."""
+    return {"type": "assistant", "parent_tool_use_id": None, "error": type_erreur,
+            "message": {"model": "<synthetic>", "content": [{"type": "text", "text": texte}]}}
+
+
+REPONSE = {"type": "assistant", "message": {"content": [
+    {"type": "text", "text": "Voici le compte rendu confidentiel de l'agent."}]}}
+
+
+def test_une_erreur_du_cli_sans_rien_qui_la_nomme_ne_se_dit_pas_success():
     res = A.lire_flux([INIT, dict(FIN, is_error=True, result="API Error: 529")])
-    assert conclusion.echec_nomme(res) == "fin_anormale (success)"
+    assert res.stopped == "fin_anormale"
+    assert conclusion.echec_nomme(res) == "fin_anormale (erreur_du_cli)"
+
+
+def test_une_erreur_d_api_sous_le_sous_type_success_se_nomme_type_statut_et_message():
+    res = A.lire_flux([INIT, _erreur_api("authentication_failed",
+                                         "Invalid API key · Please run /login"),
+                       dict(FIN, is_error=True, api_error_status=401, result="peu importe")])
+    assert res.defaut == {"erreur": "authentication_failed", "statut_http": 401,
+                          "message": "Invalid API key · Please run /login"}
+    assert conclusion.echec_nomme(res) == \
+        "fin_anormale (authentication_failed, HTTP 401 : Invalid API key · Please run /login)"
+
+
+def test_le_statut_http_seul_se_nomme():
+    res = A.lire_flux([INIT, dict(FIN, is_error=True, api_error_status=529)])
+    assert conclusion.echec_nomme(res) == "fin_anormale (HTTP 529)"
+
+
+def test_la_reponse_de_l_agent_n_apparait_jamais_dans_le_motif():
+    secret = "Voici le compte rendu confidentiel de l'agent."
+    for flux in ([INIT, REPONSE, dict(FIN, is_error=True, result=secret)],
+                 [INIT, REPONSE, _erreur_api("billing_error", "Credit balance is too low"),
+                  dict(FIN, is_error=True, api_error_status=400, result=secret)],
+                 [INIT, REPONSE, dict(FIN, subtype="error_during_execution", is_error=True,
+                                      result=secret)]):
+        res = A.lire_flux(flux)
+        motif = conclusion.echec_nomme(res)
+        assert motif.startswith("fin_anormale (")
+        assert "confidentiel" not in motif and "confidentiel" not in repr(res.defaut)
+
+
+def test_une_erreur_d_api_surmontee_ne_nomme_pas_la_fin():
+    res = A.lire_flux([INIT, _erreur_api("rate_limit", "API Error: Rate limited"), REPONSE,
+                       dict(FIN, subtype="error_during_execution", is_error=True)])
+    assert conclusion.echec_nomme(res) == "fin_anormale (error_during_execution)"
+
+
+def test_le_message_d_erreur_est_borne():
+    res = A.lire_flux([INIT, _erreur_api("invalid_request", "x" * 5_000),
+                       dict(FIN, is_error=True, api_error_status=400)])
+    assert len(res.defaut["message"]) == A._MESSAGE_ERREUR_MAX
+    assert len(conclusion.echec_nomme(res)) < A._MESSAGE_ERREUR_MAX + 60
 
 
 def test_un_flux_sans_resultat_echoue_franchement():

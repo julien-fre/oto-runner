@@ -55,6 +55,8 @@ _LECTURE_S = 600    # silence toléré entre deux événements (un outil lent)
 # Le fil borne un tour à 256 000 caractères (oto-backend, `run_thread`) : une sortie d'outil
 # se coupe AVANT, bloc par bloc, et la coupe se DIT dans le texte gardé.
 _SORTIE_MAX = 50_000
+# Le message d'une erreur d'API, tel que le motif d'échec le cite : borné.
+_MESSAGE_ERREUR_MAX = 200
 
 # Les fins du CLI (`result.subtype`) → le vocabulaire de la boucle (`AgentResult.stopped`).
 _FINS = {"success": "end_turn"}
@@ -255,6 +257,7 @@ def lire_flux(evenements, on_event=None, prolonger: Optional[Callable[[], None]]
     steps: list[AgentStep] = []
     en_vol: dict = {}          # tool_use_id → (nom, instant du départ)
     init, resultat, forfait, resume = {}, None, None, {}
+    erreur_api: Optional[dict] = None      # l'erreur d'API du DERNIER message assistant
     dernier = horloge()
     for ev in evenements:
         maintenant = horloge()      # UNE lecture par événement
@@ -293,6 +296,9 @@ def lire_flux(evenements, on_event=None, prolonger: Optional[Callable[[], None]]
                     appels.append({"name": nom})
                 elif bloc.get("type") == "text":
                     textes.append(bloc.get("text") or "")
+            # Le CLI pose `error` sur le message qu'il fabrique d'une erreur d'API ; un
+            # message assistant ordinaire ensuite (l'erreur a été surmontée) l'efface.
+            erreur_api = _erreur_api(ev.get("error"), textes)
             if apposer:
                 apposer("assistant", {"text": "".join(textes), "tool_calls": appels}, message)
             compteur.ajouter(message)
@@ -371,13 +377,46 @@ def lire_flux(evenements, on_event=None, prolonger: Optional[Callable[[], None]]
         # nommée comme telle : conclue `done`, elle cacherait un travail non fait.
         stopped=("fin_anormale" if erreur_du_cli
                  else _FINS.get(resultat.get("subtype"), resultat.get("subtype") or "no_reply")),
-        defaut=({"finish_reason": resultat.get("subtype") or "erreur_du_cli"}
-                if erreur_du_cli else None),
+        defaut=_defaut_du_cli(resultat, erreur_api) if erreur_du_cli else None,
         usage=usage,
         par_modele=par_modele,
         model=init.get("model"),
         abonnement=({"etat": forfait.get("status"), "fenetres": forfait.get("unifiedWindows")}
                     if forfait else None))
+
+
+def _erreur_api(type_erreur, textes: list) -> Optional[dict]:
+    """L'erreur d'API qu'un message assistant PORTE — `None` pour un message ordinaire.
+
+    Le CLI construit ce message lui-même, d'un seul bloc texte qui est le message
+    d'erreur (le sien, et celui du fournisseur), et le marque du champ `error`
+    (`SDKAssistantMessage.error` : `authentication_failed`, `billing_error`,
+    `rate_limit`, `invalid_request`, `server_error`, `unknown`…). Seul ce marquage
+    autorise à lire son texte : sans lui, le texte est la réponse de l'agent."""
+    if not type_erreur:
+        return None
+    message = " ".join("".join(textes).split())
+    if len(message) > _MESSAGE_ERREUR_MAX:
+        message = message[:_MESSAGE_ERREUR_MAX - 1] + "…"
+    return {"erreur": str(type_erreur), **({"message": message} if message else {})}
+
+
+def _defaut_du_cli(resultat: dict, erreur_api: Optional[dict]) -> dict:
+    """Le défaut d'un résultat `is_error` : ce qui NOMME l'erreur rendue par le CLI.
+
+    ⚠️ Le sous-type `success` ne nomme rien : le CLI le pose aussi quand le tour a fini
+    sur une erreur d'API (`is_error` vrai). L'erreur se lit alors au statut HTTP de
+    l'appel en échec (`api_error_status`, sur le résultat) et au dernier message
+    assistant marqué `error`. JAMAIS au champ `result` : c'est la réponse de l'agent."""
+    defaut: dict = {}
+    sous_type = resultat.get("subtype")
+    if sous_type and sous_type != "success":
+        defaut["finish_reason"] = sous_type
+    if erreur_api:
+        defaut.update(erreur_api)
+    if resultat.get("api_error_status") is not None:
+        defaut["statut_http"] = resultat["api_error_status"]
+    return defaut or {"finish_reason": "erreur_du_cli"}
 
 
 def run_once(*, instructions: str, inputs: str, tools, api_key: Optional[str] = None,

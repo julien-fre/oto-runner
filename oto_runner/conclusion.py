@@ -152,13 +152,24 @@ def echec_nomme(res) -> Optional[str]:
     événementiel de production : NEUF tentatives réparties sur trois travaux, les
     18 et 22/09/2026, toutes rendues `fin_anormale (non déclarée)` — un motif
     d'échec qui ne nomme rien fait chercher la cause dans les journaux d'une
-    machine, quand elle avait été captée à la source et jetée au dernier pas."""
+    machine, quand elle avait été captée à la source et jetée au dernier pas.
+
+    Quand le transport NOMME l'erreur qui a fini le tour (`erreur` : son type,
+    `statut_http`, `message` : celui du fournisseur, borné), le motif la cite à côté
+    de la fin : `fin_anormale (authentication_failed, HTTP 401 : <message>)`. La voie
+    abonnement rendait sinon `fin_anormale (success)` — le sous-type que le CLI pose
+    aussi sur un tour fini en erreur d'API, et qui ne nomme rien."""
     arret = getattr(res, "stopped", None)
     defaut = getattr(res, "defaut", None) or {}
     if arret == "appel_mal_encode":
         return f"appel_outil_mal_encode ({defaut.get('outil') or 'outil inconnu'})"
     if arret == "fin_anormale":
-        return f"fin_anormale ({_fin_du_tour(defaut) or 'non déclarée'})"
+        nommee = [_fin_du_tour(defaut), defaut.get("erreur"),
+                  f"HTTP {defaut['statut_http']}" if defaut.get("statut_http") is not None else None]
+        cause = ", ".join(str(n) for n in nommee if n) or "non déclarée"
+        if defaut.get("message"):
+            cause += f" : {defaut['message']}"
+        return f"fin_anormale ({cause})"
     return None
 
 
