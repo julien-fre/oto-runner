@@ -222,7 +222,8 @@ class Backend:
     def claim(self, lease_seconds: int = 600, depot: str = "",
               org_key_only: bool = False,
               org_ids: Optional[list] = None,
-              engine: str = "", meters_usage: bool = False) -> Optional[dict]:
+              engine: str = "", meters_usage: bool = False,
+              forfait_sonde: bool = False) -> Optional[dict]:
         """Réserve un travail — et NOMME le dépôt de clé qu'on sait consommer.
 
         Le backend y répond par `model_key` quand l'org du travail a déposé cette
@@ -268,6 +269,13 @@ class Backend:
         # worker qui la fait reçoit une clé partagée (plateforme ou tenant).
         if meters_usage:
             corps["meters_usage"] = True
+        # ⚠️ `forfait_sonde` (21/10/2026) n'est envoyé QUE par un worker
+        # `OTO_RUNNER_SONDE_FORFAIT=1`, même leçon. C'est la promesse de sonder le forfait
+        # (`op=forfait`) avant un run servi `forfait_a_sonder` ; seul un tel worker reçoit
+        # les travaux d'un forfait dont la pause, de fenêtre inconnue, a passé sa fenêtre
+        # de revérification.
+        if forfait_sonde:
+            corps["forfait_sonde"] = True
         return self._post("/api/me/runner/jobs", corps).get("job")
 
     def enqueue(self, kind: str, payload: dict,
@@ -454,6 +462,15 @@ class Backend:
         return self._post("/api/me/runner/jobs",
                           {"op": "complete", "job_id": job_id, "ok": ok,
                            "error": error, "run_id": run_id, "result": result})
+
+    def forfait(self, job_id: int, rapport: dict) -> dict:
+        """Ce que la SONDE a vu du forfait, avant le run (`agent_abonnement.verifier_forfait`).
+
+        Le backend le porte sur la connexion qui paie, comme un rapport de fin de run, et
+        tranche : `{"servable": false}` = le travail est déjà RENDU à la file, sans
+        tentative comptée — le worker ne lance rien et ne conclut rien."""
+        return self._post("/api/me/runner/jobs",
+                          {"op": "forfait", "job_id": job_id, "result": {"abonnement": rapport}})
 
     # ── la file de LIGNES (datastore) — lecture seule, pour les bornes ───────
     def count_rows(self, namespace: str, filter: Optional[dict] = None,

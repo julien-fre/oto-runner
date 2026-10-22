@@ -206,6 +206,18 @@ def _mesure_par_appel() -> bool:
     return (os.environ.get(_ENV_MESURE) or "").strip() == "1"
 
 
+#: La SONDE du forfait (21/10/2026) : avant un run d'abonnement que le backend sert
+#: `forfait_a_sonder`, le worker demande au fournisseur l'état du forfait et le backend
+#: tranche (`op=forfait`) ; il le promet au claim (`forfait_sonde`). ⚠️ Exige un backend
+#: qui déclare les deux : posé face à un backend plus ancien, CHAQUE réservation
+#: partirait en `400 : unknown_fields`.
+_ENV_SONDE = "OTO_RUNNER_SONDE_FORFAIT"
+
+
+def _sonde_du_forfait() -> bool:
+    return (os.environ.get(_ENV_SONDE) or "").strip() == "1"
+
+
 def _rapporter(quoi: str, tour: int, envoyer) -> None:
     """Un rapport au budget du serveur (`reserve`, `meter`) : rejoué sur une panne de
     transport (le serveur ignore un tour déjà réservé ou réglé) ; un REFUS nommé (4xx :
@@ -471,6 +483,82 @@ def _contexte_du_sandbox(job: dict, provider, mcp, file, apposer) -> dict:
                else {})}
 
 
+#: Le backend ne connaît pas encore `op=forfait` (déployé après ce worker) : dit une
+#: fois par processus, pas à chaque travail.
+_forfait_sans_backend = False
+
+#: Le refus d'un backend antérieur à `op=forfait` : la validation de sa route rejette la
+#: valeur d'`op` en `400 invalid_input`. Reconnu au code que le serveur NOMME
+#: (`BackendError.code`), jamais au seul statut : toute autre 400 n'est pas une op inconnue.
+_OP_INCONNUE = (400, "invalid_input")
+#: Le refus d'un backend qui connaît `op=forfait`, sur un rapport de sonde qu'il ne lit
+#: pas : il porte sur CE rapport, pas sur l'opération — la sonde reste active.
+_RAPPORT_ILLISIBLE = "forfait_report_unreadable"
+
+
+def _forme_du_rapport(rapport: dict) -> dict:
+    """Ce que le journal dit d'un rapport de sonde refusé : sa FORME (le type de chaque
+    champ, les noms des fenêtres), et l'état ou la fenêtre nommée quand ce sont des
+    textes courts. Rien d'autre : le journal ne recopie pas ce qu'il ne sait pas lire."""
+    fenetres = rapport.get("fenetres")
+    court = {k: rapport[k] for k in ("etat", "fenetre")
+             if isinstance(rapport.get(k), str) and len(rapport[k]) <= 40}
+    return {"champs": {str(k): type(v).__name__ for k, v in rapport.items()},
+            "fenetres": sorted(str(n) for n in fenetres) if isinstance(fenetres, dict) else None,
+            **court}
+
+
+def _sonder_le_forfait(job: dict, provider, file, note) -> bool:
+    """Sonde le forfait du porteur et le dit au backend, qui tranche. Rend False quand
+    le travail ne doit pas partir — il est déjà rendu à la file, sans tentative comptée.
+
+    Seulement sur un travail servi `forfait_a_sonder` : le backend ne le pose que sur
+    un forfait en pause ancienne, de fenêtre inconnue. Sur un forfait connecté, le run
+    rapportera lui-même — une sonde n'y coûterait que des jetons.
+
+    ⚠️ Dans le doute, le travail PART, comme avant la sonde : une ferme qui ne répond
+    pas à la sonde, un flux sans `rate_limit_event`, un backend qui ne connaît pas
+    l'opération ou refuse le rapport. La sonde corrige une pause ; elle ne doit jamais
+    en inventer une."""
+    global _forfait_sans_backend
+    # Le verdict REND le travail à sa file : une file sans ce verbe (le mode direct,
+    # `SansFile`, aucun travail côté serveur) n'a rien à rendre — pas de sonde.
+    trancher = getattr(file, "forfait", None)
+    if (not job.get("forfait_a_sonder") or not _sonde_du_forfait()
+            or not getattr(provider, "VERIFIE_LE_FORFAIT", False)
+            or trancher is None or _forfait_sans_backend):
+        return True
+    try:
+        rapport = provider.verifier_forfait(job.get("sandbox_id"))
+    except Exception as e:
+        logger.warning("sonde du forfait (travail %s) impossible, le travail part : %s",
+                       job.get("id"), e)
+        return True
+    if not rapport:
+        return True
+    try:
+        verdict = trancher(job["id"], rapport)
+    except BackendError as e:
+        if e.code == _RAPPORT_ILLISIBLE:
+            logger.warning("rapport de sonde refusé par le backend (travail %s), le travail "
+                           "part : %s — forme du rapport : %s", job.get("id"), e,
+                           _forme_du_rapport(rapport))
+        elif (e.status, e.code) == _OP_INCONNUE:
+            _forfait_sans_backend = True
+            logger.warning("le backend ne connaît pas `op=forfait` : sonde suspendue "
+                           "jusqu'au redémarrage (%s)", e)
+        else:
+            logger.warning("verdict du forfait (travail %s) illisible, le travail part : %s",
+                           job.get("id"), e)
+        return True
+    note("forfait_sonde", rapport=rapport, servable=verdict.get("servable"))
+    if verdict.get("servable") is False:
+        logger.info("travail %s rendu à la file : forfait du porteur indisponible "
+                    "jusqu'à %s", job.get("id"), verdict.get("limit_reset_at"))
+        return False
+    return True
+
+
 def _bornes_du_one_shot(spec: AgentSpec, provider, note,
                         max_steps: Optional[int] = None) -> dict:
     """Les limites du run que le provider ONE-SHOT sait tenir — et ce qu'il ne sait pas
@@ -578,6 +666,10 @@ def _traiter(backend: Backend, job: dict, provider,
     _exiger_cle_deposee(job)
     # Un texte joint par la réservation : refusé ici, AVANT session ou run.
     _exiger_sans_texte_joint(job)
+    # Le forfait se SONDE avant un run servi `forfait_a_sonder` (abonnement) : une pause
+    # ancienne ou fausse ne fige plus le porteur, et un forfait vraiment épuisé ne lance rien.
+    if not _sonder_le_forfait(job, provider, file, note):
+        return
     jeton = job.get("delegated_token")
     if not jeton:
         raise SansPorteur(
@@ -869,6 +961,8 @@ def main() -> None:
     # ⚠️ Un moteur ONE-SHOT (la ferme, Conversations) ne voit pas chaque appel : il ne
     # promet jamais de les mesurer, quoi que dise l'environnement.
     mesure = _mesure_par_appel() and not getattr(provider, "ONE_SHOT", False)
+    # ⚠️ Seul un provider qui sait sonder le forfait (l'abonnement) le promet au claim.
+    sonde = _sonde_du_forfait() and getattr(provider, "VERIFIE_LE_FORFAIT", False)
     orgs = _orgs_servies()   # lu au boot : une valeur illisible échoue ICI
     # Le moteur déclaré au claim : la ferme seule en déclare un (`agent_ferme.ENGINE`).
     engine = getattr(provider, "ENGINE", "")
@@ -894,7 +988,8 @@ def main() -> None:
                                 **({"org_key_only": True} if cles_seules else {}),
                                 **({"org_ids": orgs} if orgs else {}),
                                 **({"engine": engine} if engine else {}),
-                                **({"meters_usage": True} if mesure else {}))
+                                **({"meters_usage": True} if mesure else {}),
+                                **({"forfait_sonde": True} if sonde else {}))
         except BackendError as e:
             logger.warning("claim : %s", e)
             time.sleep(_POLL_S)
