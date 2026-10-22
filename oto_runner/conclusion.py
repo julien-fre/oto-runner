@@ -164,13 +164,36 @@ def echec_nomme(res) -> Optional[str]:
     if arret == "appel_mal_encode":
         return f"appel_outil_mal_encode ({defaut.get('outil') or 'outil inconnu'})"
     if arret == "fin_anormale":
-        nommee = [_fin_du_tour(defaut), defaut.get("erreur"),
+        erreur, message = defaut.get("erreur"), defaut.get("message")
+        erreur, message = _cas_connu(defaut.get("statut_http"), message) or (erreur, message)
+        nommee = [_fin_du_tour(defaut), erreur,
                   f"HTTP {defaut['statut_http']}" if defaut.get("statut_http") is not None else None]
         cause = ", ".join(str(n) for n in nommee if n) or "non déclarée"
-        if defaut.get("message"):
-            cause += f" : {defaut['message']}"
+        if message:
+            cause += f" : {message}"
         return f"fin_anormale ({cause})"
     return None
+
+
+def _cas_connu(statut, message) -> Optional[tuple[str, str]]:
+    """Le refus du fournisseur qu'on sait NOMMER, et ce qu'un humain doit faire —
+    `(genre, consigne)`, ou `None`. Le seul endroit qui reconnaît ces cas : la fin
+    anormale (voie abonnement) comme la mort sur une exception du SDK (voie API) y
+    passent.
+
+    - `cle_sans_workspace` : une clé d'ORGANISATION Anthropic (créée hors d'un
+      workspace) fait refuser en 400 toute requête qui ne nomme pas le workspace à
+      facturer, et le message du fournisseur nomme l'en-tête qui manque
+      (`anthropic-workspace-id`). Le genre qu'il pose (`unknown` par le CLI,
+      `invalid_request_error` par l'API) ne dit pas quoi faire ; la consigne, si."""
+    if statut == 400 and message and "anthropic-workspace-id" in message:
+        return _CLE_SANS_WORKSPACE
+    return None
+
+
+_CLE_SANS_WORKSPACE = ("cle_sans_workspace",
+                       "clé d'organisation Anthropic : renseigner le champ Workspace, "
+                       "ou déposer une clé créée dans un workspace")
 
 
 def _fin_du_tour(defaut: dict) -> Optional[str]:
@@ -292,7 +315,8 @@ def motif_d_echec(e: BaseException) -> str:
         err = corps["error"] if isinstance(corps.get("error"), dict) else corps
         message = err.get("message")
         if message:
-            genre = err.get("type") or err.get("code")
+            genre, message = (_cas_connu(statut, message)
+                              or (err.get("type") or err.get("code"), message))
             return (f"{type(e).__name__} : HTTP {statut}"
                     f"{f' {genre}' if genre else ''} — {message}")
     return f"{type(e).__name__} : {e}"

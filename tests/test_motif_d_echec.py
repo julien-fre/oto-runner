@@ -33,6 +33,17 @@ def test_la_raison_du_fournisseur_passe_devant_l_enveloppe():
     assert "model: claude-inconnu" in motif[:80], "la tête que garde `agents_en_echec` porte la cause"
 
 
+def test_une_cle_d_organisation_sans_workspace_se_nomme_et_dit_quoi_faire():
+    """La boucle API directe : le SDK Anthropic lève le refus en exception."""
+    motif = conclusion.motif_d_echec(BadRequestError(
+        {"type": "error", "error": {"type": "invalid_request_error", "message": (
+            "This API key is not scoped to a workspace, so this request must include the "
+            "anthropic-workspace-id header with the ID of the workspace to use.")}}))
+    assert motif == ("BadRequestError : HTTP 400 cle_sans_workspace — clé d'organisation "
+                     "Anthropic : renseigner le champ Workspace, ou déposer une clé créée "
+                     "dans un workspace")
+
+
 def test_un_corps_sans_enveloppe_error_se_lit_aussi():
     """OpenAI rend parfois l'objet d'erreur lui-même en `body`."""
     motif = conclusion.motif_d_echec(BadRequestError(

@@ -96,6 +96,29 @@ def test_le_message_d_erreur_est_borne():
     assert len(conclusion.echec_nomme(res)) < A._MESSAGE_ERREUR_MAX + 60
 
 
+SANS_WORKSPACE = ("API Error: 400 This API key is not scoped to a workspace, so this request "
+                  "must include the anthropic-workspace-id header with the ID of the workspace "
+                  "to use. Add the header, or use an API key that is scoped to a workspace.")
+
+
+def test_une_cle_d_organisation_sans_workspace_se_nomme_et_dit_quoi_faire():
+    res = A.lire_flux([INIT, REPONSE, _erreur_api("unknown", SANS_WORKSPACE),
+                       dict(FIN, is_error=True, api_error_status=400,
+                            result="Voici le compte rendu confidentiel de l'agent.")])
+    assert conclusion.echec_nomme(res) == (
+        "fin_anormale (cle_sans_workspace, HTTP 400 : clé d'organisation Anthropic : "
+        "renseigner le champ Workspace, ou déposer une clé créée dans un workspace)")
+
+
+def test_une_autre_erreur_400_reste_dite_telle_quelle():
+    res = A.lire_flux([INIT, _erreur_api("unknown", "API Error: 400 messages: text content "
+                                                    "blocks must be non-empty"),
+                       dict(FIN, is_error=True, api_error_status=400)])
+    assert conclusion.echec_nomme(res) == (
+        "fin_anormale (unknown, HTTP 400 : API Error: 400 messages: text content blocks "
+        "must be non-empty)")
+
+
 def test_un_flux_sans_resultat_echoue_franchement():
     with pytest.raises(RuntimeError, match="aucun résultat"):
         A.lire_flux([INIT, FORFAIT])
