@@ -14,6 +14,7 @@ from oto_runner import agent_ferme as F
 from oto_runner import conclusion, worker
 from oto_runner.agent_runtime import AgentSpec
 from oto_runner.deadline import DeadlineExceeded
+from oto_runner.declaration import load_spec, spec_depuis_flotte
 
 INIT = {"type": "system", "subtype": "init", "apiKeySource": "ANTHROPIC_API_KEY",
         "model": "claude-x"}
@@ -106,9 +107,37 @@ def test_sans_tours_declares_la_ferme_garde_son_defaut(ferme):
     assert "max_turns" not in ferme["post"][0]
 
 
-def test_les_tours_sont_ramenes_dans_ce_que_la_ferme_accepte():
-    assert A.champ_des_tours(5000) == {"max_turns": 1000}
+def test_les_tours_declares_passent_tels_quels():
+    """Pas de plafond haut : la borne est celle de qui déclare l'agent."""
+    assert A.champ_des_tours(5000) == {"max_turns": 5000}
     assert A.champ_des_tours(None) == {}
+
+
+def test_sans_max_steps_la_boucle_n_a_pas_de_borne_en_tours():
+    """Ni défaut (24) ni plafond dur (64) : déclaré, tel quel ; absent, aucun."""
+    assert AgentSpec(system="s", tools=frozenset()).max_steps is None
+    assert worker._spec_du_job({"payload": {"max_steps": 500}}).max_steps == 500
+    assert worker._spec_du_job({"payload": {}}).max_steps is None
+
+
+def test_max_steps_zero_leve_absent_reste_sans_borne(tmp_path):
+    """`0` n'est pas « sans borne » : il lève, sur chaque chemin qui lit la déclaration
+    (charge du travail, flotte en base, fichier). Absent (None) reste sans borne."""
+    with pytest.raises(ValueError, match="max_steps = 0"):
+        worker._spec_du_job({"payload": {"max_steps": 0}})
+    with pytest.raises(ValueError, match="max_steps = 0"):
+        spec_depuis_flotte({"id": 3, "procedure": "p", "input": "fais ceci",
+                            "tools": ["oto_procedure"], "max_steps": 0})
+    y = tmp_path / "f.yaml"
+    y.write_text("procedure: p\nnamespace: t\ntools: [oto_procedure]\ninput: fais\n"
+                 "max_steps: 0\n")
+    with pytest.raises(ValueError, match="max_steps = 0"):
+        load_spec(str(y))
+    assert worker._spec_du_job({"payload": {"max_steps": None}}).max_steps is None
+    assert spec_depuis_flotte({"id": 3, "procedure": "p", "input": "fais ceci",
+                               "tools": ["oto_procedure"], "max_steps": None}).max_steps is None
+    y.write_text("procedure: p\nnamespace: t\ntools: [oto_procedure]\ninput: fais\n")
+    assert load_spec(str(y)).max_steps is None
 
 
 def test_le_worker_ne_transmet_que_les_tours_declares():

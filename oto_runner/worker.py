@@ -103,7 +103,7 @@ def _spec_du_job(job: dict) -> AgentSpec:
     return AgentSpec(
         system=_SYSTEM_FRAME,
         tools=outils,
-        max_steps=int(p.get("max_steps") or agent_runtime.DEFAULT_MAX_STEPS),
+        max_steps=agent_runtime.max_steps_declare(p.get("max_steps")),
         # ⚠️ Le plafond de JETONS du déroulé, posé par qui enfile. Absent = pas de
         # borne — c'est le comportement d'avant, et il reste possible pour un
         # travail isolé. Mais un passage sur des données clientes ne devrait
@@ -777,8 +777,8 @@ def _traiter(backend: Backend, job: dict, provider,
                                 **_contexte_du_sandbox(job, provider, mcp, file, apposer),
                                 **_bornes_du_one_shot(
                                     spec, provider, note,
-                                    max_steps=(int(p["max_steps"]) if p.get("max_steps")
-                                               else None)),
+                                    max_steps=agent_runtime.max_steps_declare(
+                                        p.get("max_steps"))),
                                 **_reglages_du_one_shot(spec, provider, workspace))
         if not en_direct:
             # Chemin Conversations : le fil garde l'ORDRE et la SYNTHÈSE (l'observabilité

@@ -64,8 +64,8 @@ _FINS = {"success": "end_turn"}
 # `is_error: true`, mais une borne atteinte a fait son travail — elle conclut `blocked`,
 # jamais un échec rejoué, qui repaierait le même plafond à chaque tentative.
 _BORNES = {"error_max_turns": "max_steps", "error_max_budget_usd": "max_budget"}
-#: Les tours que la ferme accepte (`max_turns`, borné 1–1000 de son côté).
-_TOURS_MIN, _TOURS_MAX = 1, 1000
+#: Au moins un tour ; pas de plafond haut : la borne est celle de qui déclare l'agent.
+_TOURS_MIN = 1
 
 
 class LlmUnavailable(RuntimeError):
@@ -516,11 +516,11 @@ def verifier_forfait(sandbox: Optional[str], *, attendre=time.sleep) -> Optional
 
 
 def champ_des_tours(max_turns: Optional[int]) -> dict:
-    """`max_turns` pour la ferme, s'il est déclaré — ramené dans ce qu'elle accepte.
-    Absent : rien, la ferme garde son défaut."""
+    """`max_turns` pour la ferme, s'il est déclaré, tel quel (au moins 1).
+    Absent : rien — la ferme n'en pose pas d'office (claude-sandbox-manager#7)."""
     if not max_turns:
         return {}
-    return {"max_turns": max(_TOURS_MIN, min(int(max_turns), _TOURS_MAX))}
+    return {"max_turns": max(_TOURS_MIN, int(max_turns))}
 
 
 def echeance_du_run(max_seconds: Optional[int], horloge) -> Optional[float]:

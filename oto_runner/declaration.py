@@ -26,6 +26,7 @@ import yaml
 
 from .bilan import PERIODE_S as _BILAN_PERIODE_S
 from . import descriptions as _descriptions_outils
+from .agent_runtime import max_steps_declare
 
 # Le même journal que l'ordonnanceur : une déclaration se lit au moment où la
 # flotte se charge, et c'est là qu'on cherche son avertissement.
@@ -90,7 +91,7 @@ class FleetSpec:
     ramp_seconds: int = 60
     volume: Optional[int] = None                 # None = épuisement de la file
     budget_tokens: Optional[int] = None
-    max_steps: int = 40
+    max_steps: Optional[int] = None   # None = pas de borne en tours (comme une flotte hébergée)
     # L'instruction de départ, telle que le déclarant l'a écrite. OBLIGATOIRE :
     # un passage sans instruction est un défaut de ce qui l'a déclaré, pas
     # quelque chose que le worker complète de lui-même.
@@ -259,7 +260,7 @@ def load_spec(path: str) -> FleetSpec:
         ramp_seconds=int(raw.get("ramp_seconds") or 60),
         volume=volume,
         budget_tokens=raw.get("budget_tokens"),
-        max_steps=int(raw.get("max_steps") or 40),
+        max_steps=max_steps_declare(raw.get("max_steps")),
         max_tokens_per_row=raw.get("max_tokens_per_row"),
         input=raw.get("input") or "",
         critical_tools=tuple(raw.get("critical_tools") or ()),
@@ -313,7 +314,7 @@ def spec_depuis_flotte(f: dict) -> FleetSpec:
         concurrency=int(f.get("workers") or 3),
         volume=f.get("max_rows"),
         budget_tokens=f.get("max_tokens"),
-        max_steps=int(f.get("max_steps") or 40),
+        max_steps=max_steps_declare(f.get("max_steps")),
         max_tokens_per_row=f.get("max_tokens_per_row"),
         max_consecutive_failures=f.get("max_consecutive_failures"),
         temperature=(float(f["temperature"]) if f.get("temperature") is not None else None),

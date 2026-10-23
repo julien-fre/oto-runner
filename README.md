@@ -478,9 +478,11 @@ chaque moteur garde exactement ce qu'il avait. Qui les tient, et comment :
 | Conversations (one-shot) | partagée par passes et relances, **rabotée à 900 s** (échéance du chemin, `borne_rabotee` au journal) | **non tenue** : l'usage n'arrive qu'à la fin — `borne_non_suivie` au journal |
 | ferme (`claude-subscription`, `claude-farm`) | tenue sur le flux ; un silence au-delà de l'échéance est une borne, pas une panne ; aussi envoyée à la ferme | tenue **en vol** sur le flux |
 
-**Sur la ferme**, deux bornes de plus, tenues par le CLI lui-même : les tours
-(`max_turns` = le `max_steps` DÉCLARÉ sur l'agent ; absent, la ferme garde ses 200) et le
-budget (celui de la ferme, 5 $ ; jamais envoyé d'ici). Le CLI les rend en erreur
+**Sur la ferme**, deux bornes possibles, tenues par le CLI lui-même : les tours
+(`max_turns` = le `max_steps` DÉCLARÉ sur l'agent, tel quel ; absent, aucune — la ferme
+n'en pose plus d'office, claude-sandbox-manager#7) et le budget (`max_budget_usd`, jamais
+envoyé d'ici : aucun). Ailleurs (boucle API), même règle : `max_steps` déclaré s'applique
+tel quel, absent = pas de borne en tours. Le CLI les rend en erreur
 (`error_max_turns`, `error_max_budget_usd`) : elles concluent `stopped: max_steps` et
 `max_budget`. L'échéance court à partir de l'acceptation du run (200) : les attentes
 d'une box pleine (429) ne se prennent pas sur sa durée.
