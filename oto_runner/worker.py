@@ -103,7 +103,7 @@ def _spec_du_job(job: dict) -> AgentSpec:
     return AgentSpec(
         system=_SYSTEM_FRAME,
         tools=outils,
-        max_steps=int(p.get("max_steps") or agent_runtime.DEFAULT_MAX_STEPS),
+        max_steps=(int(p["max_steps"]) if p.get("max_steps") else None),
         # ⚠️ Le plafond de JETONS du déroulé, posé par qui enfile. Absent = pas de
         # borne — c'est le comportement d'avant, et il reste possible pour un
         # travail isolé. Mais un passage sur des données clientes ne devrait

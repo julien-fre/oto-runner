@@ -106,9 +106,17 @@ def test_sans_tours_declares_la_ferme_garde_son_defaut(ferme):
     assert "max_turns" not in ferme["post"][0]
 
 
-def test_les_tours_sont_ramenes_dans_ce_que_la_ferme_accepte():
-    assert A.champ_des_tours(5000) == {"max_turns": 1000}
+def test_les_tours_declares_passent_tels_quels():
+    """Pas de plafond haut : la borne est celle de qui déclare l'agent."""
+    assert A.champ_des_tours(5000) == {"max_turns": 5000}
     assert A.champ_des_tours(None) == {}
+
+
+def test_sans_max_steps_la_boucle_n_a_pas_de_borne_en_tours():
+    """Ni défaut (24) ni plafond dur (64) : déclaré, tel quel ; absent, aucun."""
+    assert AgentSpec(system="s", tools=frozenset()).max_steps is None
+    assert worker._spec_du_job({"payload": {"max_steps": 500}}).max_steps == 500
+    assert worker._spec_du_job({"payload": {}}).max_steps is None
 
 
 def test_le_worker_ne_transmet_que_les_tours_declares():

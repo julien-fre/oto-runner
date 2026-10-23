@@ -88,7 +88,7 @@ def test_un_champ_absent_retombe_sur_le_defaut_sans_inventer():
     s = spec_depuis_flotte({"id": 3, "procedure": "p", "input": "fais ceci",
                             "tools": ["oto_procedure"]})   # exigé dès qu'une procédure est nommée
     assert s.namespace == "" and s.tools == ("oto_procedure",) and s.filter == {}
-    assert s.concurrency == 3 and s.max_steps == 40
+    assert s.concurrency == 3 and s.max_steps is None   # pas de borne en tours imposée
     assert s.volume is None and s.budget_tokens is None
 
 

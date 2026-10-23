@@ -19,13 +19,16 @@ Ce qui est conservé du prototype, à l'identique :
   chez OpenAI) ;
 - le texte intermédiaire gardé comme repli si le budget de tours s'épuise.
 
-Divergence ASSUMÉE : le plafond de tours par défaut passe de 6 à 24. Le 6 du
-prototype bornait un chat public à petites questions ; un run de procédure est
-un travail (la veille LinkedIn réelle = 15 tours). Le plafond effectif se règle
-par job, borné dur à 64.
+Le plafond de tours appartient à qui déclare l'agent (`max_steps` du travail) :
+déclaré, il s'applique tel quel ; absent, la boucle n'a pas de borne en tours
+(la durée `max_seconds` et les jetons `max_tokens` restent les siennes, s'ils
+sont déclarés). Il n'y a plus de défaut (24) ni de plafond dur (64) imposés à
+tous : le 64 coupait en silence une borne déclarée plus haute, sur ce seul
+chemin — la ferme et l'abonnement ne l'appliquaient pas.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -59,8 +62,6 @@ _ENV_MAX_TOOL_OUTPUT = "OTO_RUNNER_MAX_TOOL_OUTPUT"
 # plutôt qu'à le retenter. Une erreur MÉTIER (not_found, 400) n'est jamais
 # rejouée — elle est une réponse.
 _TRANSIENT_RE = None  # compilé au premier usage (module importable sans re)
-DEFAULT_MAX_STEPS = 24
-HARD_MAX_STEPS = 64
 MAX_HISTORY_MESSAGES = 60   # tours provider transportés au modèle (le fil complet
                             # reste au backend — ici on borne le COÛT d'un tour)
 
@@ -80,7 +81,7 @@ class AgentSpec:
     """Ce que l'agent est autorisé à être, pour UN run."""
     system: str
     tools: frozenset
-    max_steps: int = DEFAULT_MAX_STEPS
+    max_steps: Optional[int] = None   # None = pas de borne en tours
     # ⚠️ Le plafond de JETONS d'un déroulé, appliqué PAR L'AGENT. `None` = pas de
     # borne (le comportement d'avant).
     #
@@ -366,7 +367,7 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
             on_event(ev, champs)
 
     messages = _trim(history or [])
-    plafond = max(1, min(spec.max_steps, HARD_MAX_STEPS))
+    plafond = max(1, spec.max_steps) if spec.max_steps else None
     # Lu UNE fois par déroulé, et DIT au journal : un passage se relit sans avoir
     # à deviner sous quel plafond de sortie d'outil il a tourné.
     limite_sortie = max_tool_output()
@@ -404,7 +405,7 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
     # Les images déjà entrées dans le fil de CE déroulé (`contenu_outil.admettre`).
     images_n = images_b64 = 0
 
-    for _ in range(plafond + 1):
+    for _ in (range(plafond + 1) if plafond is not None else itertools.count()):
         # L'échéance murale, AVANT d'entamer le tour (cf. `AgentSpec.max_seconds`).
         if spec.max_seconds is not None:
             ecoule = time.monotonic() - debut_deroule
