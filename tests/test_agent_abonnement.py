@@ -49,6 +49,16 @@ REPONSE = {"type": "assistant", "message": {"content": [
     {"type": "text", "text": "Voici le compte rendu confidentiel de l'agent."}]}}
 
 
+@pytest.mark.parametrize("fin", [FIN, {k: v for k, v in FIN.items() if k != "is_error"}],
+                         ids=["is_error_faux", "is_error_absent"])
+def test_un_succes_sans_erreur_du_cli_conclut_sans_echec(fin):
+    """Le sous-type `success` ne suffit pas à dire une erreur : sans `is_error`, le run
+    conclut `end_turn` et aucun motif d'échec — jamais `fin_anormale (success)`."""
+    res = A.lire_flux([INIT, APPEL, RETOUR, fin])
+    assert (res.stopped, res.defaut) == ("end_turn", None)
+    assert conclusion.echec_nomme(res) is None
+
+
 def test_une_erreur_du_cli_sans_rien_qui_la_nomme_ne_se_dit_pas_success():
     res = A.lire_flux([INIT, dict(FIN, is_error=True, result="API Error: 529")])
     assert res.stopped == "fin_anormale"
