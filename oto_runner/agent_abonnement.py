@@ -82,11 +82,74 @@ class FermePleine(RuntimeError):
 #: que des runs par clé occupent la box.
 _PLEINE_ESSAIS, _PLEINE_ATTENTE_S = 4, 20
 
+#: La FILE D'ATTENTE des places (claude-sandbox-manager, `POST /api/places`) : le worker
+#: attend son tour sur la box AVANT de prendre un travail, et son run consomme la place
+#: réservée — plus de travail pris puis refusé en 429. Le worker demande au plus
+#: `_ATTENTE_PLACE_S` à la fois (la ferme borne à 25 s), puis redemande.
+RESERVE_SA_PLACE = True
+_ATTENTE_PLACE_S = 20
+_place: Optional[str] = None    # la place tenue pour le travail en cours (`tenir_place`)
+
+
+class PlacesNonServies(RuntimeError):
+    """La ferme ne connaît pas la file des places (antérieure à claude-sandbox-manager#8)."""
+
+
+def _entetes_ferme() -> dict:
+    return {"Authorization": f"Bearer {os.environ[_ENV_JETON]}"}
+
+
+def reserver_place(attente_s: float = _ATTENTE_PLACE_S) -> Optional[str]:
+    """Attend une place sur la box, au plus `attente_s` → son jeton, ou None si aucune ne
+    s'est libérée (le worker redemande, sans avoir pris de travail)."""
+    r = requests.post(f"{os.environ[_ENV_AGENT].rstrip('/')}/api/places",
+                      json={"attente_s": attente_s}, headers=_entetes_ferme(),
+                      timeout=(10, attente_s + 15))
+    if r.status_code == 404:
+        raise PlacesNonServies(f"agent de la ferme : {r.text[:200]}")
+    if r.status_code != 200:
+        raise RuntimeError(f"agent de la ferme (place) : {r.status_code} {r.text[:300]}")
+    return r.json().get("place")
+
+
+def rendre_place(jeton: Optional[str]) -> None:
+    """Rend une place réservée et jamais consommée. Un échec ne coûte rien : la ferme la
+    reprend seule à son échéance (30 s)."""
+    if not jeton:
+        return
+    try:
+        requests.delete(f"{os.environ[_ENV_AGENT].rstrip('/')}/api/places/{jeton}",
+                        headers=_entetes_ferme(), timeout=(10, 15))
+    except requests.RequestException as e:
+        logger.warning("place %s non rendue (la ferme la reprendra) : %s", jeton[:8], e)
+
+
+def tenir_place(jeton: Optional[str]) -> None:
+    """La place réservée avant le claim : le run du travail la consommera."""
+    global _place
+    _place = jeton
+
+
+def prendre_place() -> Optional[str]:
+    """La place tenue, une fois : pour le run du travail, pas pour la sonde du forfait."""
+    global _place
+    jeton, _place = _place, None
+    return jeton
+
+
+def lacher_place() -> None:
+    """Après le travail : une place que son run n'a pas prise (travail refusé, rendu à la
+    file avant de partir) revient à la box tout de suite."""
+    rendre_place(prendre_place())
+
 
 def poster_le_run(url: str, corps: dict, entetes: dict, lecture: int,
-                  prolonger=None, on_event=None, attendre=time.sleep):
+                  prolonger=None, on_event=None, attendre=time.sleep, place=None):
     """`POST …/runs` en flux — la réponse OUVERTE (à fermer par `with`), une fois qu'elle
-    n'est plus un 429."""
+    n'est plus un 429. `place` : la place réservée, consommée par le premier essai ;
+    échue, la ferme en demande une comme sans réservation, et les essais reprennent."""
+    if place:
+        corps = {**corps, "place": place}
     for essai in range(_PLEINE_ESSAIS):
         r = requests.post(url, json=corps, headers=entetes, stream=True,
                           timeout=(10, lecture))
@@ -466,7 +529,7 @@ def run_once(*, instructions: str, inputs: str, tools, api_key: Optional[str] = 
     entetes = {"Authorization": f"Bearer {os.environ[_ENV_JETON]}",
                "Accept": "application/x-ndjson"}
     with poster_le_run(url, corps, entetes, lecture, prolonger=prolonger,
-                       on_event=on_event, attendre=attendre) as r:
+                       on_event=on_event, attendre=attendre, place=prendre_place()) as r:
         if r.status_code != 200:
             raise RuntimeError(f"agent de la ferme : {r.status_code} {r.text[:300]}")
         echeance = echeance_du_run(max_seconds, horloge)
