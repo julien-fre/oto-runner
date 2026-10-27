@@ -1001,7 +1001,9 @@ def main() -> None:
         if reserve:
             place, reserve = _attendre_une_place(provider)
             if reserve and place is None:
-                continue                # aucune place libérée : redemander
+                # La mesure de saturation de la box : ce que disaient les 429 avant la file.
+                logger.info("ferme pleine — aucune place libérée, le worker redemande")
+                continue
             if _arret_demande:
                 provider.rendre_place(place)
                 break
