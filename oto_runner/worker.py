@@ -938,18 +938,33 @@ def _secret_du_worker() -> str:
 def _attendre_une_place(provider):
     """Une place sur la box AVANT le claim (`provider.RESERVE_SA_PLACE`) : le worker attend
     son tour dans la file de la ferme, sans tenir de travail. → `(jeton, servie)` : jeton
-    None = aucune place libérée (redemander) ; `servie` False = la ferme ne connaît pas la
-    file, le worker revient au chemin d'avant (claim puis 429 rejoués)."""
+    None = aucune place (redemander) ; `servie` False = la ferme ne connaît pas la file, le
+    worker revient au chemin d'avant (claim puis 429 rejoués).
+
+    Trois raisons de ne pas avoir de place, trois messages : une ferme PLEINE (elle a
+    répondu, aucune place libérée — la mesure de saturation de la box), une ferme
+    INJOIGNABLE (réseau, délai, 5xx — rien ne dit qu'elle est pleine), et une demande
+    REFUSÉE (jeton, requête : un réglage à corriger)."""
     try:
-        return provider.reserver_place(), True
+        place = provider.reserver_place()
     except provider.PlacesNonServies as e:
         logger.warning("la ferme ne sert pas la file des places — claim sans place "
                        "réservée jusqu'au redémarrage (%s)", e)
         return None, False
-    except Exception as e:  # noqa: BLE001 — une ferme injoignable se réessaie, sans travail tenu
-        logger.warning("place sur la ferme : %s", e)
+    except provider.FermeInjoignable as e:
+        logger.warning("ferme injoignable — aucune place demandée, le worker redemande "
+                       "sans prendre de travail : %s", e)
         time.sleep(_POLL_S)
         return None, True
+    except Exception as e:  # noqa: BLE001 — un refus se réessaie, sans travail tenu
+        logger.warning("demande de place refusée par la ferme — le worker redemande "
+                       "sans prendre de travail : %s", e)
+        time.sleep(_POLL_S)
+        return None, True
+    if place is None:
+        # La mesure de saturation de la box : ce que disaient les 429 avant la file.
+        logger.info("ferme pleine — aucune place libérée, le worker redemande")
+    return place, True
 
 
 def main() -> None:
@@ -1001,51 +1016,44 @@ def main() -> None:
         if reserve:
             place, reserve = _attendre_une_place(provider)
             if reserve and place is None:
-                # La mesure de saturation de la box : ce que disaient les 429 avant la file.
-                logger.info("ferme pleine — aucune place libérée, le worker redemande")
                 continue
+            if place:
+                # Tenue — et prolongée — dès maintenant : le claim et tout le pré-run
+                # (session MCP, run_start, fil, sonde) comptent dans sa tenue.
+                provider.tenir_place(place)
+        try:
             if _arret_demande:
-                provider.rendre_place(place)
                 break
-        try:
-            # ⚠️ Le mot-clé n'est passé QUE si le mode est posé : un worker
-            # ordinaire fait exactement l'appel d'avant, à l'octet — et toute
-            # autre implémentation de `claim` (doublures, file de flotte) reste
-            # compatible sans être touchée.
-            job = backend.claim(lease_seconds=lease_s, depot=depot,
-                                **({"org_key_only": True} if cles_seules else {}),
-                                **({"org_ids": orgs} if orgs else {}),
-                                **({"engine": engine} if engine else {}),
-                                **({"meters_usage": True} if mesure else {}),
-                                **({"forfait_sonde": True} if sonde else {}))
-        except BackendError as e:
-            logger.warning("claim : %s", e)
-            if place:
-                provider.rendre_place(place)
-            time.sleep(_POLL_S)
-            continue
-        if not job:
-            if place:
-                provider.rendre_place(place)
-            time.sleep(_POLL_S)
-            continue
-        # ⚠️ Testé APRÈS le claim : entre la décision de réserver et le retour du
-        # backend, le signal a pu arriver. Rendre la ligne tout de suite vaut
-        # mieux que la garder sous bail pendant que l'agent s'éteint.
-        if _arret_demande:
-            logger.info("arrêt demandé pendant la réservation — job %s rendu à la "
-                        "file sans être entamé", job.get("id"))
-            if place:
-                provider.rendre_place(place)
-            break
-        if not place:
-            _un_travail(backend, job, provider)
-            continue
-        provider.tenir_place(place)
-        try:
+            try:
+                # ⚠️ Le mot-clé n'est passé QUE si le mode est posé : un worker
+                # ordinaire fait exactement l'appel d'avant, à l'octet — et toute
+                # autre implémentation de `claim` (doublures, file de flotte) reste
+                # compatible sans être touchée.
+                job = backend.claim(lease_seconds=lease_s, depot=depot,
+                                    **({"org_key_only": True} if cles_seules else {}),
+                                    **({"org_ids": orgs} if orgs else {}),
+                                    **({"engine": engine} if engine else {}),
+                                    **({"meters_usage": True} if mesure else {}),
+                                    **({"forfait_sonde": True} if sonde else {}))
+            except BackendError as e:
+                logger.warning("claim : %s", e)
+                job = None
+            if not job:
+                if place:
+                    provider.lacher_place()     # sans travail, la place revient tout de suite
+                time.sleep(_POLL_S)
+                continue
+            # ⚠️ Testé APRÈS le claim : entre la décision de réserver et le retour du
+            # backend, le signal a pu arriver. Rendre la ligne tout de suite vaut
+            # mieux que la garder sous bail pendant que l'agent s'éteint.
+            if _arret_demande:
+                logger.info("arrêt demandé pendant la réservation — job %s rendu à la "
+                            "file sans être entamé", job.get("id"))
+                break
             _un_travail(backend, job, provider)
         finally:
-            provider.lacher_place()     # le travail refusé avant son run la rend ici
+            if place:
+                provider.lacher_place()     # le travail refusé avant son run la rend ici
     logger.info("agent sorti proprement — aucun travail interrompu")
 
 

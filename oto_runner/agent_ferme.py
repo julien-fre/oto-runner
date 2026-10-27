@@ -61,7 +61,7 @@ DEFAULT_MODEL = "claude-sonnet-5"
 SOURCE_ATTENDUE = "ANTHROPIC_API_KEY"
 
 _ENV_AGENT, _ENV_JETON = agent_abonnement._ENV_AGENT, agent_abonnement._ENV_JETON
-FermePleine = agent_abonnement.FermePleine
+FermePleine, FermeInjoignable = agent_abonnement.FermePleine, agent_abonnement.FermeInjoignable
 # La file des places de la box : la même pour les deux voies, qui partagent ses places.
 RESERVE_SA_PLACE = agent_abonnement.RESERVE_SA_PLACE
 PlacesNonServies = agent_abonnement.PlacesNonServies

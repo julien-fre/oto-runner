@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from typing import Callable, Optional
 
@@ -76,6 +77,10 @@ class FermePleine(RuntimeError):
     """La ferme tient déjà toutes ses places, essai après essai."""
 
 
+class FermeInjoignable(RuntimeError):
+    """La ferme n'a pas répondu (réseau, délai, 5xx) : rien ne dit qu'elle est pleine."""
+
+
 #: Une box pleine (429) : réessayée, bail prolongé entre deux essais, puis l'échec nommé.
 #: Commun aux deux voies de la ferme : les runs par clé et par abonnement se partagent
 #: les mêmes places, et un travail d'abonnement ne doit pas perdre une tentative parce
@@ -89,6 +94,15 @@ _PLEINE_ESSAIS, _PLEINE_ATTENTE_S = 4, 20
 RESERVE_SA_PLACE = True
 _ATTENTE_PLACE_S = 20
 _place: Optional[str] = None    # la place tenue pour le travail en cours (`tenir_place`)
+#: Le PRÉ-RUN (claim, session MCP, run_start, lecture du fil, sonde du forfait) peut
+#: dépasser la tenue d'une place (30 s) : tant que le worker la tient, il la PROLONGE
+#: toutes les `_PROLONGER_PLACE_S` (`POST /api/places/{jeton}/prolonger`). Un worker mort
+#: cesse de la prolonger, et elle revient à la box à son échéance courte.
+_PROLONGER_PLACE_S = 10
+_entretien: Optional["_Entretien"] = None
+#: `qui` tient la place, dit au journal de la ferme : un identifiant de PROCESSUS, rien du
+#: travail ni de l'org (`OTO_RUNNER_QUI` le remplace, p.ex. par le nom de l'unité).
+_ENV_QUI = "OTO_RUNNER_QUI"
 
 
 class PlacesNonServies(RuntimeError):
@@ -99,17 +113,78 @@ def _entetes_ferme() -> dict:
     return {"Authorization": f"Bearer {os.environ[_ENV_JETON]}"}
 
 
+def _url_places(suite: str = "") -> str:
+    return f"{os.environ[_ENV_AGENT].rstrip('/')}/api/places{suite}"
+
+
+def qui() -> str:
+    """Ce que la ferme journalise de qui tient une place : jamais un nom d'org ou de client."""
+    return (os.environ.get(_ENV_QUI) or "").strip()[:64] or f"oto-runner:{os.getpid()}"
+
+
 def reserver_place(attente_s: float = _ATTENTE_PLACE_S) -> Optional[str]:
     """Attend une place sur la box, au plus `attente_s` → son jeton, ou None si aucune ne
-    s'est libérée (le worker redemande, sans avoir pris de travail)."""
-    r = requests.post(f"{os.environ[_ENV_AGENT].rstrip('/')}/api/places",
-                      json={"attente_s": attente_s}, headers=_entetes_ferme(),
-                      timeout=(10, attente_s + 15))
+    s'est libérée (le worker redemande, sans avoir pris de travail). La ferme qui ne
+    répond pas lève `FermeInjoignable` — ce n'est PAS une ferme pleine."""
+    try:
+        r = requests.post(_url_places(), json={"attente_s": attente_s, "qui": qui()},
+                          headers=_entetes_ferme(), timeout=(10, attente_s + 15))
+    except requests.RequestException as e:
+        raise FermeInjoignable(f"{type(e).__name__} : {e}") from e
     if r.status_code == 404:
         raise PlacesNonServies(f"agent de la ferme : {r.text[:200]}")
+    if r.status_code >= 500:
+        raise FermeInjoignable(f"{r.status_code} {r.text[:300]}")
     if r.status_code != 200:
         raise RuntimeError(f"agent de la ferme (place) : {r.status_code} {r.text[:300]}")
     return r.json().get("place")
+
+
+def prolonger_place(jeton: str) -> Optional[bool]:
+    """Repousse l'échéance de la place. True : elle est toujours à nous ; False : perdue
+    (échue, rendue, plafond) ; None : la ferme ne sait pas prolonger (404, antérieure à
+    cette route) — la place tient alors sa seule tenue d'origine, comme avant."""
+    r = requests.post(_url_places(f"/{jeton}/prolonger"), headers=_entetes_ferme(),
+                      timeout=(5, 10))
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        raise RuntimeError(f"agent de la ferme (prolonger) : {r.status_code} {r.text[:200]}")
+    return bool(r.json().get("prolongee"))
+
+
+class _Entretien(threading.Thread):
+    """Prolonge la place tenue tant que le worker la tient (`tenir_place` → `prendre_place`)."""
+
+    def __init__(self, jeton: str):
+        super().__init__(daemon=True, name=f"place-{jeton[:8]}")
+        self.jeton, self.periode, self.arret = jeton, _PROLONGER_PLACE_S, threading.Event()
+
+    def run(self) -> None:
+        while not self.arret.wait(self.periode):
+            try:
+                tenue = prolonger_place(self.jeton)
+            except Exception as e:  # noqa: BLE001 — un battement manqué ; la tenue en couvre deux
+                logger.warning("place %s non prolongée (ferme injoignable ?) : %s",
+                               self.jeton[:8], e)
+                continue
+            if self.arret.is_set():
+                return
+            if tenue is None:
+                logger.info("la ferme ne prolonge pas les places — %s tient sa tenue "
+                            "d'origine", self.jeton[:8])
+                return
+            if not tenue:
+                logger.warning("place %s perdue (échue ou tenue trop longtemps) — le run "
+                               "en redemandera une", self.jeton[:8])
+                return
+
+
+def _arreter_entretien() -> None:
+    global _entretien
+    if _entretien is not None:
+        _entretien.arret.set()
+        _entretien = None
 
 
 def rendre_place(jeton: Optional[str]) -> None:
@@ -125,16 +200,37 @@ def rendre_place(jeton: Optional[str]) -> None:
 
 
 def tenir_place(jeton: Optional[str]) -> None:
-    """La place réservée avant le claim : le run du travail la consommera."""
-    global _place
+    """La place réservée avant le claim : le run du travail la consommera. Prolongée
+    jusque-là, claim et pré-run compris."""
+    global _place, _entretien
+    _arreter_entretien()
     _place = jeton
+    if jeton:
+        _entretien = _Entretien(jeton)
+        _entretien.start()
 
 
 def prendre_place() -> Optional[str]:
-    """La place tenue, une fois : pour le run du travail, pas pour la sonde du forfait."""
+    """La place tenue, une fois : pour le run du travail. Elle cesse d'être prolongée."""
     global _place
+    _arreter_entretien()
     jeton, _place = _place, None
     return jeton
+
+
+def place_de_la_sonde() -> Optional[str]:
+    """La place tenue, PRÊTÉE à la sonde du forfait (`garder_place`) : la ferme la rend à
+    la réservation à la fin de la sonde, pour le run du travail. None quand la ferme ne
+    sait pas la garder (antérieure à la prolongation, qui est arrivée avec `garder_place`) :
+    la sonde demande alors sa propre place, comme avant. Le battement synchrone repousse
+    aussi l'échéance juste avant la sonde."""
+    if not _place:
+        return None
+    try:
+        return _place if prolonger_place(_place) else None
+    except Exception as e:  # noqa: BLE001 — dans le doute, la sonde fait comme avant
+        logger.warning("place %s : la sonde ne la prend pas (%s)", _place[:8], e)
+        return None
 
 
 def lacher_place() -> None:
@@ -151,8 +247,12 @@ def poster_le_run(url: str, corps: dict, entetes: dict, lecture: int,
     if place:
         corps = {**corps, "place": place}
     for essai in range(_PLEINE_ESSAIS):
-        r = requests.post(url, json=corps, headers=entetes, stream=True,
-                          timeout=(10, lecture))
+        try:
+            r = requests.post(url, json=corps, headers=entetes, stream=True,
+                              timeout=(10, lecture))
+        except (requests.ConnectionError, requests.Timeout) as e:
+            raise FermeInjoignable(f"agent de la ferme injoignable : {type(e).__name__} : "
+                                   f"{e}") from e
         if r.status_code != 429:
             return r
         r.close()
@@ -560,13 +660,17 @@ def verifier_forfait(sandbox: Optional[str], *, attendre=time.sleep) -> Optional
     if not sandbox:
         return None
     resolve_key()
+    # La sonde tourne sur la place du travail, que la ferme lui rend ensuite : sur une
+    # box pleine, une sonde sans place essuyait des 429 pendant que la place du worker
+    # échouait, et le run du travail repartait sans elle.
+    place = place_de_la_sonde()
     corps = {"prompt": "ok", "model": _SONDE_MODELE, "max_seconds": _SONDE_S,
-             **champ_des_tours(1)}
+             **champ_des_tours(1), **({"garder_place": True} if place else {})}
     url = f"{os.environ[_ENV_AGENT].rstrip('/')}/api/sandboxes/{sandbox}/runs"
     entetes = {"Authorization": f"Bearer {os.environ[_ENV_JETON]}",
                "Accept": "application/x-ndjson"}
     forfait = None
-    with poster_le_run(url, corps, entetes, _SONDE_S, attendre=attendre) as r:
+    with poster_le_run(url, corps, entetes, _SONDE_S, attendre=attendre, place=place) as r:
         if r.status_code != 200:
             raise RuntimeError(f"agent de la ferme (sonde) : {r.status_code} {r.text[:300]}")
         for ligne in r.iter_lines(decode_unicode=True):
