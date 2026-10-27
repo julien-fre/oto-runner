@@ -62,6 +62,11 @@ SOURCE_ATTENDUE = "ANTHROPIC_API_KEY"
 
 _ENV_AGENT, _ENV_JETON = agent_abonnement._ENV_AGENT, agent_abonnement._ENV_JETON
 FermePleine = agent_abonnement.FermePleine
+# La file des places de la box : la même pour les deux voies, qui partagent ses places.
+RESERVE_SA_PLACE = agent_abonnement.RESERVE_SA_PLACE
+PlacesNonServies = agent_abonnement.PlacesNonServies
+reserver_place, rendre_place = agent_abonnement.reserver_place, agent_abonnement.rendre_place
+tenir_place, lacher_place = agent_abonnement.tenir_place, agent_abonnement.lacher_place
 _PLEINE_ESSAIS = agent_abonnement._PLEINE_ESSAIS
 
 _sandboxes_creees: set = set()
@@ -153,7 +158,8 @@ def run_once(*, instructions: str, inputs: str, tools, api_key: Optional[str] = 
                else agent_abonnement._LECTURE_S)
     with agent_abonnement.poster_le_run(
             _url(f"{slug}/runs"), corps, _entetes(Accept="application/x-ndjson"), lecture,
-            prolonger=prolonger, on_event=on_event, attendre=attendre) as r:
+            prolonger=prolonger, on_event=on_event, attendre=attendre,
+            place=agent_abonnement.prendre_place()) as r:
         if r.status_code != 200:
             raise RuntimeError(f"agent de la ferme : {r.status_code} {r.text[:300]}")
         echeance = agent_abonnement.echeance_du_run(max_seconds, horloge)
