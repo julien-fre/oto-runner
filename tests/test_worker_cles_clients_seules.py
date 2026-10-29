@@ -65,6 +65,7 @@ def test_en_mode_cles_clients_un_worker_SANS_depot_ne_demarre_pas(monkeypatch):
 
 
 def test_le_journal_de_demarrage_dit_QUI_paie(monkeypatch):
+    monkeypatch.delenv("OTO_RUNNER_METERS_USAGE", raising=False)
     monkeypatch.setenv("OTO_RUNNER_ORG_KEYS_ONLY", "1")
     assert "UNIQUEMENT" in W._dire_la_cle("anthropic")
     monkeypatch.delenv("OTO_RUNNER_ORG_KEYS_ONLY")
@@ -130,3 +131,48 @@ def test_un_worker_ORDINAIRE_part_sans_cle_d_org_comme_avant(monkeypatch, sessio
     monkeypatch.delenv("OTO_RUNNER_ORG_KEYS_ONLY", raising=False)
     with pytest.raises(_Sentinelle):
         W._traiter(object(), _job(), _Provider())
+
+
+# ── 4. clés servies seules, MESURÉES : la clé partagée sans clé d'environnement ──
+#
+# `OTO_RUNNER_ORG_KEYS_ONLY=1` + `OTO_RUNNER_METERS_USAGE=1` : le worker ne tient
+# aucune clé, et promet de réserver puis régler chaque appel. Le backend lui sert
+# alors la clé de l'org OU la clé partagée à laquelle l'org a accès (réglée à son
+# budget) ; sans la promesse, il rend ces travaux à la file.
+
+@pytest.fixture
+def clees_servies_mesurees(monkeypatch):
+    monkeypatch.setenv("OTO_RUNNER_ORG_KEYS_ONLY", "1")
+    monkeypatch.setenv("OTO_RUNNER_METERS_USAGE", "1")
+
+
+def test_servies_et_mesurees_il_demarre_SANS_cle_d_environnement(clees_servies_mesurees):
+    p = _Provider()
+    W._verifier_cle_au_demarrage(p, "anthropic")
+    assert p.cle_demandee is False, "la promesse de mesure n'exige aucune clé de repli"
+
+
+def test_servies_et_mesurees_la_reservation_porte_les_DEUX_promesses(monkeypatch):
+    corps = _corps_du_claim(monkeypatch, org_key_only=True, meters_usage=True)
+    assert corps["org_key_only"] is True and corps["meters_usage"] is True
+
+
+def test_servies_et_mesurees_le_journal_dit_la_cle_partagee(clees_servies_mesurees):
+    dit = W._dire_la_cle("anthropic")
+    assert "partagée" in dit and "budget" in dit and "aucune clé d'environnement" in dit
+
+
+def test_servies_et_mesurees_la_cle_partagee_servie_depasse_les_gardes(
+        clees_servies_mesurees, session_espion):
+    """Le backend sert la clé partagée comme une clé d'org (`model_key`), marquée
+    `meter_usage` : le filet local la laisse passer."""
+    with pytest.raises(_Sentinelle):
+        W._traiter(object(), _job(model_key="sk-ant-partagee", meter_usage=True),
+                   _Provider())
+
+
+def test_servies_et_mesurees_sans_cle_servie_le_refus_nomme_les_deux_issues(
+        clees_servies_mesurees, session_espion):
+    with pytest.raises(W.SansCleDeposee) as e:
+        W._traiter(object(), _job(), _Provider())
+    assert "déposer sa clé" in str(e.value) and "clé partagée" in str(e.value)
