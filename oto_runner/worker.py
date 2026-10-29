@@ -648,7 +648,12 @@ def _traiter(backend: Backend, job: dict, provider,
     def note(ev: str, **champs) -> None:
         if journal_ is not None:
             journal_.ecrire(ev, **champs)
-    on_event = journal_.evenement if journal_ is not None else None
+    def on_event(ev: str, champs: dict) -> None:
+        # Le journal, et les runs que l'agent ouvre lui-même (cf. `runs_de_l_agent`) :
+        # suivis même sans journal, la conclusion doit pouvoir fermer ceux qu'il oublie.
+        tenu.agent.evenement(ev, champs)
+        if journal_ is not None:
+            journal_.evenement(ev, champs)
     p = job.get("payload") or {}
     projet = p.get("project_id")
     # ⚠️ **L'agent travaille SOUS L'IDENTITÉ DU DEMANDEUR**, pas sous celle du
@@ -825,13 +830,15 @@ def _traiter(backend: Backend, job: dict, provider,
     jetons, lus_en_cache = resultat["usage_tokens"], resultat["usage_cache_read"]
     echec = conclusion.echec_nomme(res)
     outcome = "failed" if echec else ("done" if res.stopped == "end_turn" else "blocked")
+    # Ceux de l'agent d'abord : le run technique se clôt en dernier, comme il s'est ouvert.
+    oublies = conclusion.clore_ceux_de_l_agent(tenu, outcome, job_id=job["id"])
     cloture = conclusion.clore(tenu, outcome, note=echec, job_id=job["id"])
     # L'état final et la raison d'arrêt, tels que DÉCLARÉS — la dernière ligne
     # d'un travail qui a conclu. Le modèle DEMANDÉ et le modèle SERVI, tous deux :
     # l'étiquette d'une flotte a trompé deux heures de mesures (06/09) ; quand ils
     # diffèrent, les deux se voient.
     note("resultat", outcome=outcome, run_id=run_id, run_finish=cloture,
-         resultat=resultat, reponse=res.reply, modele_demande=demande,
+         runs_de_l_agent_clos=oublies, resultat=resultat, reponse=res.reply, modele_demande=demande,
          modele_servi=res.model)
     conclusion.rendre(file, job["id"], ok=not echec, error=echec, run_id=run_id,
                       result=resultat, note=note)
