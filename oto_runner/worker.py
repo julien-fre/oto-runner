@@ -185,7 +185,10 @@ class SansCleDeposee(RuntimeError):
 
 #: Le mode « clés clients seules » (13/09/2026) : le worker ne tient AUCUNE clé de
 #: modèle à lui. Il démarre sans elle, ne réserve que les travaux de sa famille, et
-#: ne tourne que sur la clé que l'organisation du travail a déposée.
+#: ne tourne que sur la clé que le backend lui SERT avec le travail : celle que l'org a
+#: déposée — ou, s'il promet aussi la mesure (`OTO_RUNNER_METERS_USAGE=1`), la clé
+#: PARTAGÉE à laquelle l'org a accès, réglée à son budget. Sans la promesse, le backend
+#: rend ces travaux-là à la file pour un worker qui mesure.
 _ENV_CLES_CLIENTS = "OTO_RUNNER_ORG_KEYS_ONLY"
 
 
@@ -323,13 +326,17 @@ def _exiger_cle_deposee(job: dict) -> None:
     clé de l'environnement comme avant."""
     if _cles_clients_seules() and not job.get("model_key"):
         raise SansCleDeposee(
-            f"le travail {job.get('id')} n'apporte pas de clé d'organisation, et ce "
-            "worker n'en tient aucune à lui : il n'est pas exécuté. L'organisation "
-            "doit déposer sa clé de modèle, puis relancer l'agent.")
+            f"le travail {job.get('id')} n'apporte aucune clé servie, et ce worker "
+            "n'en tient aucune à lui : il n'est pas exécuté. L'organisation doit "
+            "déposer sa clé de modèle, ou obtenir l'accès à la clé partagée, puis "
+            "relancer l'agent.")
 
 
 def _dire_la_cle(depot: str) -> str:
     """Qui paie, dit au journal de démarrage — plutôt que déduit d'une facture."""
+    if _cles_clients_seules() and _mesure_par_appel():
+        return (f"SERVIE uniquement ({depot}) : celle de l'org, ou la clé partagée "
+                "réglée à son budget — aucune clé d'environnement")
     if _cles_clients_seules():
         return f"de l'org UNIQUEMENT ({depot}) — aucune clé de plateforme"
     return (f"de l'org quand elle en dépose une ({depot})" if depot

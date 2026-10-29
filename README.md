@@ -68,6 +68,9 @@ OTO_RUNNER_ORG_KEYS_ONLY=1           # AUCUNE clé de plateforme : démarre sans
                                      # réserve que les travaux de SA famille, ne tourne que sur la
                                      # clé déposée par l'org (le backend arrête le travail sinon).
                                      # Exige un dépôt nommé et un backend qui déclare `org_key_only`.
+                                     # Avec OTO_RUNNER_METERS_USAGE=1 en plus : il tourne aussi sur
+                                     # la clé PARTAGÉE à laquelle l'org a accès, servie par le backend
+                                     # et réglée à son budget (cf. « Clé partagée, sans clé d'env »).
 OTO_RUNNER_MODEL=claude-sonnet-5     # le DÉFAUT du worker — un agent qui déclare son modèle le remplace (cf. « Le modèle »)
 OTO_RUNNER_ARMED=1                   # cf. ci-dessus
 OTO_RUNNER_PASSAGES_DIR=passages     # où le worker écrit le JOURNAL de chaque travail
@@ -287,6 +290,38 @@ modèle. Deux passages de modèles différents sur le même worker ne partagent 
 de préfixe — chacun garde le sien, aucun n'invalide l'autre, mais le premier
 tour de chacun se paie plein tarif. Le pool reste homogène par FAMILLE ; c'est
 la variation À L'INTÉRIEUR d'une famille qui segmente le cache.
+
+## Clé partagée, sans clé d'env
+
+Une organisation qui n'a pas déposé sa clé de modèle peut avoir accès à une clé
+**partagée** (posée par la plateforme ou par un tenant). Le backend ne la sert qu'à un
+worker qui **mesure chaque appel** : il réserve chaque tour avant l'appel et le règle
+après, au budget d'unités de l'org. À un worker qui ne le promet pas, il ne la sert
+pas : il rend le travail à la file, pour un worker qui mesure.
+
+Le worker qui sert cette clé, et rien d'autre que des clés servies :
+
+```
+OTO_RUNNER_PROVIDER=anthropic
+OTO_RUNNER_ORG_KEYS_ONLY=1     # aucune clé d'environnement : pas d'ANTHROPIC_API_KEY
+OTO_RUNNER_METERS_USAGE=1      # promet `meters_usage` au claim : réserve puis règle chaque appel
+```
+
+- Il démarre sans clé d'environnement. Le journal de démarrage dit « SERVIE
+  uniquement ».
+- Il tourne sur la clé de l'org quand elle en a déposé une, sinon sur la clé partagée
+  à laquelle elle a accès.
+- Un travail sans clé servie est arrêté à la réservation, avec sa raison écrite. Le
+  filet local `SansCleDeposee` le conclut en échec avant toute session, et nomme
+  les deux issues : déposer sa clé, ou obtenir l'accès à la clé partagée.
+- ⚠️ `ORG_KEYS_ONLY=1` sans `METERS_USAGE=1` ne sert jamais la clé partagée : ces
+  travaux-là repartent à la file, en boucle tant qu'aucun worker ne mesure.
+- ⚠️ Un tenant qui veut servir SA clé partagée à ses orgs a besoin de **ce**
+  worker-là. Ni un worker d'abonnement ni la ferme ne conviennent : la ferme fait
+  tourner un exécuteur dont on ne mesure pas chaque appel, et le backend ne lui sert
+  jamais une clé refacturée.
+- Un travail qui ne déclare pas son modèle est refusé au premier tour : un appel
+  sans barème ne se réserve pas.
 
 ## Deux modes : par la file, ou direct
 
