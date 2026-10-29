@@ -26,10 +26,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .backend import BackendError
+from .runs_de_l_agent import RunsDeLAgent
 
 logger = logging.getLogger("oto_runner")
 
@@ -47,6 +48,45 @@ class RunEnCours:
     """
     mcp: object = None
     run_id: Optional[str] = None
+    # Les runs que l'AGENT a ouverts lui-même (cf. `runs_de_l_agent`) : suivis au fil
+    # du journal, fermés à la conclusion s'il ne l'a pas fait.
+    agent: RunsDeLAgent = field(default_factory=RunsDeLAgent)
+
+
+# L'issue d'un run oublié par l'agent, selon celle du TRAVAIL. Un travail `done` ne
+# prouve pas que le run de l'agent a tout fait — il s'est arrêté avant sa dernière
+# étape : `partial`, avec la note qui le dit (le serveur l'exige).
+_ISSUE_DU_RUN_OUBLIE = {"done": "partial", "blocked": "blocked", "failed": "failed"}
+
+
+def clore_ceux_de_l_agent(tenu: RunEnCours, outcome: str, job_id=None) -> list:
+    """Clore les runs que l'agent a ouverts et laissés ouverts → `[{run_id, outcome,
+    run_finish}]`, vide s'il n'en a laissé aucun.
+
+    Sans ça, un agent qui termine son tour avant le `run_finish` de sa procédure
+    laisse son run « en cours » pour toujours, et l'alerte des agents le signale
+    comme un run sans fin (vécu le 29/10/2026). Ne lève JAMAIS, comme `clore`."""
+    clos = []
+    issue = _ISSUE_DU_RUN_OUBLIE.get(outcome, "failed")
+    # ⚠️ En anglais, comme tout ce que lit un agent ou une personne sur la plateforme.
+    # La note dit QUI a arrêté : l'agent qui finit son tour (`done`), ou l'hôte —
+    # une borne (`blocked`) ou une erreur (`failed`) — avant que l'agent n'y arrive.
+    if outcome == "done":
+        cause = "the agent ended its turn without calling run_finish on this run"
+    elif outcome == "blocked":
+        cause = "the job hit a declared limit before the agent called run_finish"
+    else:
+        cause = "the job failed before the agent called run_finish"
+    note = (f"Closed by the host: {cause} (job outcome: {outcome}). Its calls show "
+            f"what it did; whether every step ran is not known.")
+    for run_id in tenu.agent.ouverts():
+        if run_id == tenu.run_id:
+            continue
+        sous = RunEnCours(mcp=tenu.mcp, run_id=run_id)
+        clos.append({"run_id": run_id, "outcome": issue,
+                     "run_finish": clore(sous, issue, note=note[:_NOTE_MAX],
+                                         job_id=job_id)})
+    return clos
 
 
 def clore(tenu: RunEnCours, outcome: str, note: Optional[str] = None,
@@ -333,11 +373,12 @@ def en_echec(journal_, tenu: RunEnCours, job: dict, file,
     mort. Un journal qui s'arrête sur `erreur` est un travail dont personne n'a
     rien rendu, et c'est précisément ce qu'on ne veut plus."""
     motif = motif_d_echec(e)
+    oublies = clore_ceux_de_l_agent(tenu, "failed", job_id=job.get("id"))
     cloture = clore(tenu, "failed", note=f"travail interrompu — {motif}"[:_NOTE_MAX],
                     job_id=job.get("id"))
     if journal_ is not None:
         journal_.ecrire("resultat", outcome="failed", run_id=tenu.run_id,
-                        run_finish=cloture,
+                        run_finish=cloture, runs_de_l_agent_clos=oublies,
                         resultat={"stopped": "erreur", "type": type(e).__name__,
                                   "erreur": str(e)},
                         reponse=None, modele_demande=modele_demande,
