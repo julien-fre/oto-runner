@@ -21,16 +21,24 @@ un appel rendu sans erreur retire le run de la liste.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Optional
+
+logger = logging.getLogger("oto_runner")
 
 _RUN_ID = re.compile(r'"run_id"\s*:\s*"([^"]+)"')
 
 
 def _est(nom: Optional[str], verbe: str) -> bool:
-    # ⚠️ Le connecteur MCP peut PRÉFIXER les noms (`mcp__oto__run_start`,
-    # `<connecteur>_run_start`) : l'appartenance se teste par SUFFIXE.
-    return bool(nom) and (nom == verbe or nom.endswith("_" + verbe))
+    # Le nom tel que le serveur le sert (`run_start` : boucle ordinaire — les verbes
+    # `run_*` ne sont jamais renommés par un tenant) ou tel que le CLI le préfixe
+    # (`mcp__oto__run_start`). ⚠️ Jamais un simple suffixe : un outil de connecteur
+    # nommé `<x>_run_start` rendrait un `run_id` qui n'est pas un run oto, et la
+    # conclusion irait le « clore » sous l'identité de l'agent.
+    if not isinstance(nom, str):
+        return False
+    return nom == verbe or (nom.startswith("mcp__") and nom.endswith("__" + verbe))
 
 
 def _texte(contenu) -> str:
@@ -84,8 +92,8 @@ class RunsDeLAgent:
                             ok=bool(champs.get("ok")), texte=champs.get("texte") or "")
             elif ev == "claude":
                 self._flux(champs)
-        except Exception:  # noqa: BLE001 — cf. docstring
-            pass
+        except Exception:  # noqa: BLE001 — cf. docstring ; mais jamais en silence
+            logger.warning("runs de l'agent : événement %s illisible", ev, exc_info=True)
 
     def _flux(self, ev: dict) -> None:
         message = ev.get("message") or {}

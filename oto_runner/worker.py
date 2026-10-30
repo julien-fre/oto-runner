@@ -838,8 +838,8 @@ def _traiter(backend: Backend, job: dict, provider,
     # l'étiquette d'une flotte a trompé deux heures de mesures (06/09) ; quand ils
     # diffèrent, les deux se voient.
     note("resultat", outcome=outcome, run_id=run_id, run_finish=cloture,
-         runs_de_l_agent_clos=oublies, resultat=resultat, reponse=res.reply, modele_demande=demande,
-         modele_servi=res.model)
+         runs_de_l_agent_clos=oublies, resultat=resultat, reponse=res.reply,
+         modele_demande=demande, modele_servi=res.model)
     conclusion.rendre(file, job["id"], ok=not echec, error=echec, run_id=run_id,
                       result=resultat, note=note)
     logger.info("job %s : %s (%s · %d appels · jetons : %s (+ %s lus en cache) · "

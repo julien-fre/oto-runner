@@ -184,3 +184,118 @@ def test_la_voie_abonnement_ferme_le_run_oublie(monkeypatch):
     (mcp,) = mcps
     clotures = [(a["run_id"], a["outcome"]) for n, a in mcp.appels if n == "run_finish"]
     assert clotures == [("r-CLI", "partial"), ("r-NEUF", "done")]
+
+
+# ── ajouts de revue : rattachement, statut, échec de la fermeture ────────────
+
+def test_seuls_les_verbes_d_oto_comptent_jamais_un_suffixe():
+    # Un outil de connecteur qui finirait en `_run_start` rendrait un run_id qui n'est
+    # pas un run oto : la conclusion irait le « clore » sous l'identité de l'agent.
+    s = RunsDeLAgent()
+    _outil(s, "apify_run_start", {}, '{"run_id": "r-CONNECTEUR"}')
+    _cli(s, "t1", "mcp__oto__apify_run_start", {}, '{"run_id": "r-CONNECTEUR-CLI"}')
+    _outil(s, "run_start", {}, '{"run_id": "r-OTO"}')
+    _outil(s, "apify_run_finish", {"run_id": "r-OTO"}, '{"ok": true}')
+    assert s.ouverts() == ["r-OTO"]
+
+
+def test_des_arguments_en_chaine_json_ferment_aussi():
+    s = RunsDeLAgent()
+    _outil(s, "run_start", {}, '{"run_id": "r-S"}')
+    _outil(s, "run_finish", json.dumps({"run_id": "r-S", "outcome": "done"}), "{}")
+    assert s.ouverts() == []
+
+
+def test_un_run_finish_sur_un_autre_run_ne_clot_pas_le_sien():
+    # La clé est le run_id NOMMÉ par l'appel : un run_finish sur un run_id inconnu (le
+    # run technique, une coquille) ne retire pas celui que l'agent a ouvert.
+    s = RunsDeLAgent()
+    _outil(s, "run_start", {}, '{"run_id": "r-A"}')
+    _outil(s, "run_finish", {"run_id": "r-AUTRE", "outcome": "done"}, "{}")
+    assert s.ouverts() == ["r-A"]
+
+
+def test_deux_travaux_ne_partagent_rien():
+    # Deux exécutions concurrentes du même agent : chaque travail a son suivi.
+    a, b = RunsDeLAgent(), RunsDeLAgent()
+    _outil(a, "run_start", {}, '{"run_id": "r-A"}')
+    _outil(b, "run_start", {}, '{"run_id": "r-B"}')
+    assert a.ouverts() == ["r-A"] and b.ouverts() == ["r-B"]
+
+
+def test_une_borne_ferme_le_run_oublie_en_blocked(monkeypatch):
+    mcps = []
+
+    class McpEspion(FauxMcp):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            mcps.append(self)
+
+    def faux_run(spec, transport, provider, on_event=None, **_):
+        on_event("outil", {"nom": "run_start", "arguments": {"label": "x"},
+                           "ok": True, "texte": json.dumps({"run_id": "r-AGENT"})})
+        return AgentResult(reply="fini", stopped="max_steps")
+
+    monkeypatch.setattr(W, "McpSession", McpEspion)
+    monkeypatch.setattr(W.agent_runtime, "run", faux_run)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    W._un_travail(FauxBackend(), _job("start"), _PROVIDER)
+    (mcp,) = mcps
+    clotures = [(a["run_id"], a["outcome"], a.get("note")) for n, a in mcp.appels
+                if n == "run_finish"]
+    assert [(r, o) for r, o, _ in clotures] == [("r-AGENT", "blocked"), ("r-NEUF", "blocked")]
+    assert "declared limit" in clotures[0][2]
+
+
+def test_une_fermeture_refusee_ne_fait_pas_perdre_le_travail(monkeypatch, caplog):
+    # Contrat : pas de repli silencieux (le refus se journalise), mais l'échec de ce
+    # geste annexe ne coûte ni la clôture du run technique ni le `complete` du travail.
+    mcps = []
+
+    class McpQuiRefuse(FauxMcp):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            mcps.append(self)
+
+        def outil(self, name, args=None):
+            out = super().outil(name, args)
+            if name == "run_finish" and (args or {}).get("run_id") == "r-AGENT":
+                raise RuntimeError("run_finish : 503 Service Unavailable")
+            return out
+
+    def faux_run(spec, transport, provider, on_event=None, **_):
+        on_event("outil", {"nom": "run_start", "arguments": {"label": "x"},
+                           "ok": True, "texte": json.dumps({"run_id": "r-AGENT"})})
+        return AgentResult(reply="fini", stopped="end_turn")
+
+    monkeypatch.setattr(W, "McpSession", McpQuiRefuse)
+    monkeypatch.setattr(W.agent_runtime, "run", faux_run)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    backend = FauxBackend()
+    with caplog.at_level("WARNING", logger="oto_runner"):
+        W._un_travail(backend, _job("start"), _PROVIDER)
+    (mcp,) = mcps
+    assert [a["run_id"] for n, a in mcp.appels if n == "run_finish"] == ["r-AGENT", "r-NEUF"]
+    assert ("complete", True, "r-NEUF") in backend.appels
+    assert any("run_finish refusé" in r.getMessage() and "503" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_clore_ceux_de_l_agent_rend_le_refus_et_saute_le_run_technique():
+    from oto_runner import conclusion as C
+
+    class Mcp:
+        def __init__(self):
+            self.appels = []
+
+        def outil(self, name, args):
+            self.appels.append(args["run_id"])
+            raise RuntimeError("401 Unauthorized")
+
+    tenu = C.RunEnCours(mcp=Mcp(), run_id="r-TECH")
+    _outil(tenu.agent, "run_start", {}, '{"run_id": "r-TECH"}')
+    _outil(tenu.agent, "run_start", {}, '{"run_id": "r-AGENT"}')
+    clos = C.clore_ceux_de_l_agent(tenu, "done", job_id=7)
+    assert tenu.mcp.appels == ["r-AGENT"]
+    assert clos == [{"run_id": "r-AGENT", "outcome": "partial",
+                     "run_finish": "refusé : 401 Unauthorized"}]
