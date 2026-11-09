@@ -93,3 +93,26 @@ def test_une_valeur_illisible_leve(monkeypatch):
     monkeypatch.setenv("OTO_RUNNER_SANDBOX_WAIT_S", "trois minutes")
     with pytest.raises(ValueError):
         M.attente_bac_max()
+
+
+def test_un_project_non_declare_est_retire(monkeypatch):
+    """`oto_recipe` ne déclare pas `_project` : le modèle le posait quand même
+    (« 793 »), et l'appel était refusé avant de rien lancer."""
+    vus = []
+
+    def _post(self, corps, avec_entetes=False):
+        m = corps.get("method")
+        if m == "initialize":
+            return ({"mcp-session-id": "s1"}, {}) if avec_entetes else {}
+        if m == "tools/list":
+            return {"result": {"tools": [{"name": _OUTIL, "inputSchema": {
+                "type": "object", "properties": {"op": {}, "slug": {}}}}]}}
+        if m == "tools/call":
+            vus.append(corps["params"]["arguments"])
+            return _OK
+        return {}
+
+    monkeypatch.setattr(McpSession, "_post", _post)
+    s = McpSession(url="http://x", token="t", project=793)
+    _, is_error, _ = s.call(_OUTIL, {"op": "run", "slug": "x", "_project": "793"})
+    assert not is_error and "_project" not in vus[0] and vus[0]["slug"] == "x"

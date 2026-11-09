@@ -349,6 +349,17 @@ class McpSession:
                     "flotte travaille dans l'org de sa flotte, sans équipe",
                     name, jeton)
         declares = self._declares(name)
+        if declares:
+            # Un jeton de contexte que l'outil ne DÉCLARE pas ne lui sert à rien et le
+            # fait refuser (pydantic `unexpected_keyword_argument`). Mesuré du 03 au
+            # 09/11/2026 : 34 `oto_recipe` refusés pour un `_project` posé par le modèle
+            # (« 793 », en chaîne), surtout un agent de l'org 489 à chaque passage. Il
+            # est retiré, jamais transmis. Schéma inconnu (`declares` vide) : on ne
+            # retire rien, faute de savoir.
+            for jeton in ("_project", "_run_id", "_org"):
+                if jeton not in declares and args.pop(jeton, None) is not None:
+                    logger.warning("%s : `%s` posé par le modèle a été RETIRÉ — l'outil "
+                                   "ne le déclare pas", name, jeton)
         if self.project is not None and "_project" in declares:
             args.setdefault("_project", self.project)
         if self.org is not None and "_org" in declares:
