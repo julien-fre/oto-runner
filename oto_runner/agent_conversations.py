@@ -137,7 +137,7 @@ def model() -> str:
     return os.environ.get("OTO_RUNNER_MODEL") or DEFAULT_MODEL
 
 
-_DEPOTS_PAR_HOTE = {"api.mistral.ai": "mistral", "openrouter.ai": "openrouter"}
+_DEPOTS_PAR_HOTE = {"api.mistral.ai": "mistral"}
 
 
 def depot() -> str:

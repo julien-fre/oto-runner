@@ -421,13 +421,18 @@ def complete(*, system: str, messages: list, tools: list[dict],
     # mesuré le 14/09/2026). L'omettre laisserait le défaut du fournisseur, qui peut
     # raisonner et le facturer.
     if effort_retenu and routeur:
-        # OpenRouter normalise le raisonnement sous `reasoning` pour tous ses hôtes ;
-        # `none` l'éteint (`enabled: false`) plutôt que de laisser le défaut de l'hôte.
-        corps["reasoning"] = ({"enabled": False} if effort_retenu == EFFORT_SANS_RAISONNEMENT
-                              else {"effort": effort_retenu})
+        # OpenRouter normalise le raisonnement sous `reasoning` pour tous ses hôtes
+        # (`effort` ∈ max|xhigh|high|medium|low|minimal|none ; `none` l'éteint), lu le
+        # 12/11/2026 sur openrouter.ai/docs/guides/best-practices/reasoning-tokens.md.
+        corps["reasoning"] = {"effort": effort_retenu}
     elif effort_retenu:
         corps["reasoning_effort"] = effort_retenu
     if routeur:
+        # ⚠️ Aucun hôte épinglé ne déclare `prompt_cache_key` dans ses paramètres
+        # (`supported_parameters`, /api/v1/models/<id>/endpoints, 12/11/2026) : avec
+        # `require_parameters`, l'envoyer pourrait les écarter TOUS. Leur cache est
+        # implicite (préfixe identique), il n'a pas besoin de la clé.
+        corps.pop("prompt_cache_key", None)
         # ⚠️ Les données d'un agent sont celles du client : jamais un hôte qui les garde ou
         # s'en sert (`data_collection: deny`). Les hôtes épinglés par le catalogue d'abord,
         # et SEULS (`only`) : la liste borne le prix et la quantification ; un repli entre
@@ -438,9 +443,6 @@ def complete(*, system: str, messages: list, tools: list[dict],
             routage.update(order=list(providers), only=list(providers),
                            allow_fallbacks=True)
         corps["provider"] = routage
-        # Le coût réel du tour, rendu dans `usage.cost` : lu au journal, jamais facturé
-        # (le barème règle aux jetons).
-        corps["usage"] = {"include": True}
     # Le passage d'abord, l'hôte à défaut, rien sinon. Le calcul est fait UNE
     # fois : appeler deux fois relisait l'environnement entre le test et l'usage.
     retenue = temperature if temperature is not None else temperature_hote()

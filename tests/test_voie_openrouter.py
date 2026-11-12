@@ -53,7 +53,8 @@ def test_les_hotes_epingles_partent_seuls_et_sans_collecte(monkeypatch):
                               "only": ["deepinfra/fp8", "deepseek"],
                               "allow_fallbacks": True, "data_collection": "deny",
                               "require_parameters": True}
-    assert vu["usage"] == {"include": True}
+    # aucun hôte épinglé ne le déclare : avec `require_parameters`, il les écarterait
+    assert "prompt_cache_key" not in vu
 
 
 def test_sans_hotes_epingles_la_collecte_reste_refusee(monkeypatch):
@@ -65,7 +66,7 @@ def test_le_raisonnement_part_sous_reasoning(monkeypatch):
     vu, _ = _corps(monkeypatch, effort="medium", max_output_tokens=16000)
     assert vu["reasoning"] == {"effort": "medium"} and "reasoning_effort" not in vu
     vu, _ = _corps(monkeypatch, effort="none")
-    assert vu["reasoning"] == {"enabled": False}
+    assert vu["reasoning"] == {"effort": "none"}
 
 
 def test_des_hotes_epingles_hors_openrouter_sont_refuses(monkeypatch):
@@ -76,7 +77,7 @@ def test_des_hotes_epingles_hors_openrouter_sont_refuses(monkeypatch):
 def test_une_autre_voie_ne_recoit_aucun_routage(monkeypatch):
     vu, _ = _corps(monkeypatch, base="https://api.mistral.ai/v1", effort="high",
                    max_output_tokens=16000)
-    assert "provider" not in vu and "usage" not in vu
+    assert "provider" not in vu and "prompt_cache_key" in vu
     assert vu["reasoning_effort"] == "high"
 
 
@@ -93,3 +94,31 @@ def test_le_travail_porte_ses_hotes_jusqu_a_la_spec():
          "providers": ["deepinfra/fp8", " ", 3, "deepseek"], "instruction": "x"}
     spec = W._spec_du_job({"id": 1, "payload": p, "procedure": "p"})
     assert spec.providers == ("deepinfra/fp8", "deepseek")
+
+
+def test_le_tour_openrouter_se_regle_avec_son_entree_et_sa_sortie(monkeypatch):
+    """Sur une clé partagée, chaque tour se règle (`op=meter`) : sans entrée ou sans
+    sortie, le backend refuse (`usage_unmeasured`) et le travail s'arrête. L'usage que rend
+    OpenRouter, cache compris, arrive entier au règlement."""
+    monkeypatch.setenv("OTO_RUNNER_OPENAI_BASE", _OR)
+    monkeypatch.setattr(P.requests, "post", lambda *a, **k: _Resp({
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "choices": [{"message": {"role": "assistant", "content": "ok"},
+                     "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 50,
+                  "prompt_tokens_details": {"cached_tokens": 700}, "cost": 0.0001}}))
+    turn = P.complete(system="s", messages=[], tools=[], api_key="k")
+
+    class _File:
+        vu = []
+
+        def meter(self, job_id, tour, charge):
+            self.vu.append(charge)
+            return {"ok": True}
+    f = _File()
+    mesurer = W._mesureur(f, {"id": 9, "meter_usage": True})
+    mesurer(0, dict(turn.usage), turn.model)
+    (charge,) = f.vu
+    assert charge == {"model": "deepseek/deepseek-v4.1-flash-1017", "usage_input": 300,
+                      "usage_output": 50, "usage_cache_write": None,
+                      "usage_cache_read": 700}
