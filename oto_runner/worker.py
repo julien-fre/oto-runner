@@ -144,6 +144,10 @@ def _spec_du_job(job: dict) -> AgentSpec:
         # propriété du modèle catalogué, comme l'effort. Absent = celui de l'hôte.
         max_output_tokens=(int(p["max_output_tokens"])
                            if p.get("max_output_tokens") else None),
+        # Les hôtes OpenRouter épinglés par le catalogue (oto-backend `runner_models`) :
+        # des chaînes non vides seulement, dans l'ordre reçu.
+        providers=tuple(str(x).strip() for x in (p.get("providers") or [])
+                        if isinstance(x, str) and x.strip()),
         label=f"job:{job.get('id')}")
 
 

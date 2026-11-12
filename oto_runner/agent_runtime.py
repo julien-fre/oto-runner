@@ -134,6 +134,9 @@ class AgentSpec:
     # catalogué côté backend, comme l'effort (14/09/2026 : 16 000 pour
     # `mistral-medium-2604`). `None` = celui de l'hôte (`OTO_RUNNER_MAX_TOKENS`).
     max_output_tokens: Optional[int] = None
+    # Les hôtes OpenRouter épinglés par le catalogue pour ce modèle (oto-backend
+    # `runner_models.Modele.providers`). Vide = aucun : le fournisseur route seul.
+    providers: tuple = ()
     # Le MODÈLE de ce déroulé, déclaré par l'agent qui l'a demandé (oto-backend
     # #939 : le travail porte `payload.model`). `None` = celui du worker, pris
     # dans son environnement — le comportement d'avant, et celui de tout agent
@@ -447,7 +450,10 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
                                  # Le workspace d'une clé d'organisation, comme la clé : un
                                  # satellite du credential, jamais journalisé. Transmis
                                  # seulement s'il est posé.
-                                 **({"workspace": workspace} if workspace else {}))
+                                 **({"workspace": workspace} if workspace else {}),
+                                 # Les hôtes épinglés : transmis seulement s'il y en a,
+                                 # pour que les autres voies gardent leur signature.
+                                 **({"providers": spec.providers} if spec.providers else {}))
         duree_tour_ms = int((time.monotonic() - debut_tour) * 1000)
         n_tours += 1
         non_mesures = compteur.ajouter(turn.usage)
