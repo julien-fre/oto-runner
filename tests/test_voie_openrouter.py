@@ -2,9 +2,9 @@
 
 Ce qui se casse en silence si on ne le fige pas : l'hôte qui ne nomme pas son dépôt
 (le worker sonderait une famille que personne ne demande), les hôtes épinglés qui ne
-partent pas (le tour irait chez un hôte fp4 plus cher que la ligne du barème), un
-raisonnement envoyé sous le nom que l'hôte ignore, et un cache absent qui ferait
-refuser le règlement du tour.
+partent pas (le tour irait chez un hôte fp4, plus cher), un raisonnement envoyé sous le
+nom que l'hôte ignore, un cache absent qui ferait refuser le règlement du tour, et le coût
+rendu par OpenRouter qui n'arriverait pas au backend (le tour s'y facture sur lui).
 """
 from __future__ import annotations
 
@@ -97,9 +97,9 @@ def test_le_travail_porte_ses_hotes_jusqu_a_la_spec():
 
 
 def test_le_tour_openrouter_se_regle_avec_son_entree_et_sa_sortie(monkeypatch):
-    """Sur une clé partagée, chaque tour se règle (`op=meter`) : sans entrée ou sans
-    sortie, le backend refuse (`usage_unmeasured`) et le travail s'arrête. L'usage que rend
-    OpenRouter, cache compris, arrive entier au règlement."""
+    """Sur une clé partagée, chaque tour se règle (`op=meter`) : sans entrée, sans sortie
+    ou sans coût, le backend refuse (`usage_unmeasured`) et le travail s'arrête. L'usage que
+    rend OpenRouter, cache et coût compris, arrive entier au règlement."""
     monkeypatch.setenv("OTO_RUNNER_OPENAI_BASE", _OR)
     monkeypatch.setattr(P.requests, "post", lambda *a, **k: _Resp({
         "model": "deepseek/deepseek-v4.1-flash-1017",
@@ -121,4 +121,22 @@ def test_le_tour_openrouter_se_regle_avec_son_entree_et_sa_sortie(monkeypatch):
     (charge,) = f.vu
     assert charge == {"model": "deepseek/deepseek-v4.1-flash-1017", "usage_input": 300,
                       "usage_output": 50, "usage_cache_write": None,
-                      "usage_cache_read": 700}
+                      "usage_cache_read": 700, "usage_cost_usd": 0.0001}
+
+
+def test_sans_cout_rendu_aucun_cout_n_est_invente(monkeypatch):
+    """Un fournisseur qui ne rend pas de coût (Mistral, Scaleway) : rien n'est posé, et le
+    règlement part comme avant, à l'octet."""
+    _, turn = _corps(monkeypatch)
+    assert "cost_usd" not in turn.usage
+
+    class _File:
+        vu = []
+
+        def meter(self, job_id, tour, charge):
+            self.vu.append(charge)
+    f = _File()
+    W._mesureur(f, {"id": 9, "meter_usage": True})(0, dict(turn.usage), "m")
+    assert "usage_cost_usd" not in f.vu[0]
+    for brut in (True, "0.1", None):
+        assert "cost_usd" not in P.usage_declare({"prompt_tokens": 1, "cost": brut})

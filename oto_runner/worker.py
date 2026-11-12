@@ -274,6 +274,10 @@ def _mesureur(file, job: dict):
                   "usage_output": usage.get("output_tokens"),
                   "usage_cache_write": usage.get("cache_creation_input_tokens"),
                   "usage_cache_read": usage.get("cache_read_input_tokens")}
+        if usage.get("cost_usd") is not None:
+            # Le coût que le fournisseur a rendu (OpenRouter) : le backend le journalise
+            # tel quel pour un modèle facturé au coût, et refuse le tour sans lui.
+            charge["usage_cost_usd"] = usage["cost_usd"]
         _rapporter("règlement", tour, lambda: file.meter(job["id"], tour, charge))
     return mesurer
 

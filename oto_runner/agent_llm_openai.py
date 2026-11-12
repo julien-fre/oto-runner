@@ -312,6 +312,13 @@ def usage_declare(u: Optional[dict]) -> dict:
             usage["input_tokens"] = max(0, int(u["prompt_tokens"]) - int(caches))
     if u.get("completion_tokens") is not None:
         usage["output_tokens"] = int(u["completion_tokens"])
+    cout = u.get("cost")
+    if isinstance(cout, (int, float)) and not isinstance(cout, bool):
+        # Ce que le fournisseur a FACTURÉ pour l'appel, en USD : OpenRouter le rend avec
+        # chaque réponse (`usage.cost`, mesuré le 12/11/2026 sur ses quatre modèles). Un
+        # modèle de la famille `openrouter` se facture sur ce chiffre, pas au jeton : le
+        # même id y est servi par plusieurs hôtes, à des prix différents.
+        usage["cost_usd"] = float(cout)
     return usage
 
 
