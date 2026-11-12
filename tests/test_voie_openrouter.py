@@ -105,6 +105,7 @@ def test_le_tour_openrouter_se_regle_avec_son_entree_et_sa_sortie(monkeypatch):
         "model": "deepseek/deepseek-v4.1-flash-1017",
         "choices": [{"message": {"role": "assistant", "content": "ok"},
                      "finish_reason": "stop"}],
+        "provider": "StepFun",
         "usage": {"prompt_tokens": 1000, "completion_tokens": 50,
                   "prompt_tokens_details": {"cached_tokens": 700}, "cost": 0.0001}}))
     turn = P.complete(system="s", messages=[], tools=[], api_key="k")
@@ -121,7 +122,8 @@ def test_le_tour_openrouter_se_regle_avec_son_entree_et_sa_sortie(monkeypatch):
     (charge,) = f.vu
     assert charge == {"model": "deepseek/deepseek-v4.1-flash-1017", "usage_input": 300,
                       "usage_output": 50, "usage_cache_write": None,
-                      "usage_cache_read": 700, "usage_cost_usd": 0.0001}
+                      "usage_cache_read": 700, "usage_cost_usd": 0.0001,
+                      "usage_host": "StepFun"}
 
 
 def test_sans_cout_rendu_aucun_cout_n_est_invente(monkeypatch):
@@ -137,6 +139,6 @@ def test_sans_cout_rendu_aucun_cout_n_est_invente(monkeypatch):
             self.vu.append(charge)
     f = _File()
     W._mesureur(f, {"id": 9, "meter_usage": True})(0, dict(turn.usage), "m")
-    assert "usage_cost_usd" not in f.vu[0]
+    assert "usage_cost_usd" not in f.vu[0] and "usage_host" not in f.vu[0]
     for brut in (True, "0.1", None):
         assert "cost_usd" not in P.usage_declare({"prompt_tokens": 1, "cost": brut})

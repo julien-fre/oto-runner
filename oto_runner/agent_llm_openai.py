@@ -484,6 +484,11 @@ def complete(*, system: str, messages: list, tools: list[dict],
     msg = choix.get("message") or {}
     fin = choix.get("finish_reason")
     usage = usage_declare(d.get("usage"))
+    if routeur and isinstance(d.get("provider"), str) and d["provider"].strip():
+        # L'HÔTE qui a répondu à ce tour (OpenRouter le nomme : « StepFun »). Il change
+        # d'un tour à l'autre sur un secours, et c'est lui qui dit dans quel pays le tour
+        # est parti : il voyage jusqu'au règlement, puis au journal.
+        usage["host"] = d["provider"].strip()
 
     # Ce que le fournisseur DIT avoir servi, à défaut ce qu'on a demandé.
     servi = d.get("model") or nom
