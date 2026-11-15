@@ -74,25 +74,29 @@ MAX_HISTORY_MESSAGES = 60   # tours provider transportés au modèle (le fil com
 # Bornée à deux reprises CONSÉCUTIVES : un modèle qui bute trois fois de suite ne
 # change pas de méthode, et chaque coupe coûte un plafond entier. Au-delà, c'est la
 # `fin_anormale` d'avant, inchangée. Seul un provider qui sait rejouer un tour coupé
-# (`reprise_sur_coupe`, la voie Chat Completions) y entre : les autres n'ont pas le
-# crochet, et leur coupe reste terminale.
+# (`reprise_sur_coupe` : la voie Chat Completions, sur OpenRouter seulement) y entre ;
+# ailleurs — Anthropic, Mistral, Scaleway — la coupe reste terminale.
 REPRISES_SUR_COUPE = 2
 
 
-def consigne_de_reprise(plafond: Optional[int], abandonnes: int) -> str:
+def consigne_de_reprise(plafond: Optional[int], abandonnes: int, rejoue: bool) -> str:
     """Le message user qui suit un tour coupé. En anglais, comme le prompt système de
     la plateforme ; il rappelle la langue de la consigne, pour que le rapport ne la
-    quitte pas."""
+    quitte pas. `rejoue` : le tour coupé est-il dans le fil ? Sinon (ni texte ni appel
+    complet, tout le plafond parti en raisonnement), « continue » ne désignerait rien."""
     limite = f" ({plafond} tokens)" if plafond else ""
     lignes = [f"Your previous reply was cut off at the output limit{limite}: its end "
-              "was lost."]
+              "was lost." if rejoue else
+              f"Your previous reply was cut off at the output limit{limite}: nothing "
+              "of it was kept."]
     if abandonnes:
         lignes.append(f"{abandonnes} tool call(s) cut mid-way were dropped and NOT "
                       "executed.")
     lignes.append("Do not rewrite what you already wrote. Continue from where you "
-                  "stopped, and write results with the tools in smaller batches — "
-                  "several short tool calls rather than one long reply. Keep writing "
-                  "in the language of your instruction.")
+                  "stopped" if rejoue else "Restart that step")
+    lignes[-1] += (", and write results with the tools in smaller batches — several "
+                   "short tool calls rather than one long reply. Keep writing in the "
+                   "language of your instruction.")
     return " ".join(lignes)
 
 
@@ -579,7 +583,8 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
             # complets), et la consigne de reprise le suit, après les résultats. Les
             # deux s'apposent au fil du backend : une reprise du run relit le même fil.
             assistant_raw, appels, abandonnes = reprise
-            consigne = consigne_de_reprise(turn.plafond, abandonnes)
+            consigne = consigne_de_reprise(turn.plafond, abandonnes,
+                                           rejoue=assistant_raw is not None)
             note("reprise_longueur", **(turn.defaut or {}), tour=n_tours,
                  reprise=reprises, reprises_max=REPRISES_SUR_COUPE,
                  plafond=turn.plafond, appels_gardes=[c.name for c in appels],

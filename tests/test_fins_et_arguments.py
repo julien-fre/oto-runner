@@ -15,11 +15,6 @@ Ce que ces bancs tiennent :
 - `stop`, et `tool_calls` porteur d'un appel, restent des fins normales.
 
 Ces bancs tiennent sur le code d'avant le lot : leur rouge y est celui du défaut.
-
-⚠️ 15/11/2026 (job 99236) : `length` SEUL se reprend désormais, borné
-(`agent_runtime.REPRISES_SUR_COUPE`, bancs dans `test_reprise_sur_coupe.py`). Le tour
-garde son nom (`fin_anormale`, motif brut) ; c'est la boucle qui le relève. Les bancs de
-boucle ci-dessous servent donc les autres fins, ou épuisent la borne.
 """
 from __future__ import annotations
 
@@ -145,18 +140,15 @@ def test_les_fins_normales_restent_normales(monkeypatch, finish, message):
     assert turn.stop_reason == "end_turn" and turn.defaut is None
 
 
-@pytest.mark.parametrize("finish", ["model_length", "error", None, "inattendue"])
-def test_une_fin_anormale_arrete_la_boucle_avant_tout_appel(monkeypatch, finish):
+def test_une_fin_anormale_arrete_la_boucle_avant_tout_appel(monkeypatch):
     # Le second tour n'est servi qu'au code qui NE s'arrête pas : sans lui, ce banc
     # tombait sur la doublure vide, pas sur l'appel exécuté.
-    # ⚠️ `length` n'y est plus (15/11/2026) : ses appels complets s'exécutent à la
-    # reprise (`test_reprise_sur_coupe.py`). Les autres fins restent terminales.
-    _servir(monkeypatch, _reponse(_appel('{"limit": 3}'), finish),
+    _servir(monkeypatch, _reponse(_appel('{"limit": 3}'), "length"),
             _reponse(_texte("fini"), "stop"))
     outils = _Outils()
     res = agent_runtime.run(SPEC, outils, P, prompt="go", api_key="k")
-    assert outils.appels == [], "un appel porté par une fin anormale n'est pas exécuté"
-    assert res.stopped == "fin_anormale" and (res.defaut or {}).get("finish_reason") == finish
+    assert outils.appels == [], "un appel porté par une sortie coupée n'est pas exécuté"
+    assert res.stopped == "fin_anormale" and (res.defaut or {}).get("finish_reason") == "length"
 
 
 # ── 3. Jusqu'à la conclusion du worker ───────────────────────────────────────
@@ -188,16 +180,13 @@ def _travail_servi(monkeypatch, *reponses):
 
 
 def test_une_sortie_tronquee_conclut_le_travail_en_echec_nomme(monkeypatch):
-    # ⚠️ Trois coupes de suite (15/11/2026) : la première et deux reprises, la borne. Une
-    # seule coupe se relève désormais (`test_reprise_sur_coupe.py`).
-    coupe = _reponse(_texte("la fiche est pr"), "length")
-    b, clotures = _travail_servi(monkeypatch, coupe, coupe, coupe)
+    b, clotures = _travail_servi(monkeypatch, _reponse(_texte("la fiche est pr"), "length"))
     assert [c["outcome"] for c in clotures] == ["failed"], "aucune réussite sur une sortie coupée"
     assert clotures[0]["note"] == "fin_anormale (length)"
     assert b.conclusion["ok"] is False and b.conclusion["error"] == "fin_anormale (length)"
     assert b.conclusion["result"]["stopped"] == "fin_anormale"
     assert b.conclusion["result"].get("defaut") == {"forme": "fin_anormale", "finish_reason": "length"}
-    assert b.conclusion["result"]["usage_output"] == 60, "les trois tours coupés sont comptés"
+    assert b.conclusion["result"]["usage_output"] == 20
 
 
 def test_une_fin_normale_conclut_toujours_done(monkeypatch):

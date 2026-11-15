@@ -13,12 +13,16 @@ Ce que ces bancs tiennent :
   d'avant ; un tour normal remet le compte à zéro ;
 - une borne du déroulé (tours, jetons) atteinte juste après une coupe ne conclut pas à
   sa place : la fin reste `fin_anormale (length)` ;
-- `stop` est inchangé, et la voie Anthropic (`max_tokens`) n'a pas de reprise.
+- `stop` est inchangé ; hors OpenRouter (Scaleway, Mistral) et sur la voie Anthropic
+  (`max_tokens`), la coupe reste terminale — les bancs de `test_fins_et_arguments.py`
+  et `test_fins_anthropic.py` le tiennent sans changement.
 """
 from __future__ import annotations
 
 import copy
 import json
+
+import pytest
 
 from oto_runner import agent_llm as A
 from oto_runner import agent_llm_openai as P
@@ -29,6 +33,13 @@ from tests.test_fins_anthropic import _texte as _texte_anthropic
 from tests.test_fins_et_arguments import _Outils, _Resp, _reponse, _texte, _travail_servi
 
 SPEC = AgentSpec(system="s", tools=frozenset({"data_rows"}), max_steps=10)
+_OR = "https://openrouter.ai/api/v1"
+
+
+@pytest.fixture(autouse=True)
+def _openrouter(monkeypatch):
+    """La voie du job 99236 : la reprise n'existe que sur OpenRouter."""
+    monkeypatch.setenv("OTO_RUNNER_OPENAI_BASE", _OR)
 
 
 def _appels(*paires):
@@ -127,6 +138,10 @@ def test_un_tour_coupe_sans_texte_ni_appel_complet_ne_rejoue_aucun_message_vide(
     second = corps[1]["messages"]
     assert [m["role"] for m in second] == ["system", "user", "user"]
     assert not any(m["role"] in ("assistant", "tool") for m in second)
+    # Rien du tour coupé n'est dans le fil : la consigne ne dit pas « continue ».
+    assert "nothing of it was kept" in second[-1]["content"]
+    assert "Restart that step" in second[-1]["content"]
+    assert "Continue from where you stopped" not in second[-1]["content"]
 
 
 # ── 2. La borne ──────────────────────────────────────────────────────────────
@@ -208,6 +223,19 @@ def test_seule_la_coupe_au_plafond_se_reprend(monkeypatch):
         _servir(monkeypatch, _reponse(_texte("x"), fin))
         turn = P.complete(system="s", messages=[], tools=[], api_key="k")
         assert P.reprise_sur_coupe(turn) is None, fin
+
+
+@pytest.mark.parametrize("base", ["https://api.scaleway.ai/v1", "https://api.mistral.ai/v1"])
+def test_hors_openrouter_la_coupe_reste_terminale(monkeypatch, base):
+    """L'ordre `tool` → `user` qu'une reprise pose a été refusé par l'API Mistral :
+    hors OpenRouter, le comportement d'avant, à l'octet."""
+    monkeypatch.setenv("OTO_RUNNER_OPENAI_BASE", base)
+    corps = _servir(monkeypatch, _reponse(_appels(("c1", '{"limit": 3}')), "length"),
+                    _reponse(_texte("fini"), "stop"))
+    outils = _Outils()
+    res, evenements, _ = _run(outils=outils)
+    assert len(corps) == 1 and outils.appels == []
+    assert res.stopped == "fin_anormale" and _evs(evenements, "reprise_longueur") == []
 
 
 def test_la_voie_anthropic_n_a_pas_de_reprise(monkeypatch):

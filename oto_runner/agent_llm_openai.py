@@ -568,7 +568,15 @@ def reprise_sur_coupe(turn: Turn) -> Optional[tuple[Optional[dict], tuple[ToolCa
       un `tool_calls` sans son message `role:tool` fait refuser le fil entier, et des
       arguments illisibles rejoués tels quels aussi.
 
-    La décision de REPRENDRE appartient à la boucle (`agent_runtime`), qui la borne."""
+    La décision de REPRENDRE appartient à la boucle (`agent_runtime`), qui la borne.
+
+    ⚠️ OpenRouter SEUL. La reprise pose un message `user` juste après des messages
+    `role:tool` (appels gardés) ou après un autre `user` (rien de rejoué), et l'API
+    Mistral a refusé ces ordres de messages (400). Non vérifié chez Mistral ni chez
+    Scaleway : la reprise y tuerait le travail sur un 400 APRÈS l'exécution des appels
+    gardés — pire que la `fin_anormale (length)` d'aujourd'hui, qui y reste."""
+    if depot() != _DEPOT_ROUTEUR:
+        return None
     if turn.stop_reason != "fin_anormale" or \
             (turn.defaut or {}).get("finish_reason") != _FIN_REPRENABLE:
         return None
