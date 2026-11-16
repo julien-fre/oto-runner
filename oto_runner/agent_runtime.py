@@ -65,6 +65,40 @@ _TRANSIENT_RE = None  # compilé au premier usage (module importable sans re)
 MAX_HISTORY_MESSAGES = 60   # tours provider transportés au modèle (le fil complet
                             # reste au backend — ici on borne le COÛT d'un tour)
 
+# ── La REPRISE d'un tour coupé au plafond de complétion ─────────────────────
+#
+# ⚠️ Vécu le 15/11/2026 : un tour qui veut tout écrire d'un coup bute sur le
+# plafond de complétion, et la sortie coupée tuait le travail (`fin_anormale`, 6 pas
+# des 90 permis). Le tour coupé se GARDE (son texte, ses appels complets), le modèle
+# lit qu'il a été coupé, et le déroulé continue — compté comme un tour ordinaire.
+# Bornée à deux reprises CONSÉCUTIVES : un modèle qui bute trois fois de suite ne
+# change pas de méthode, et chaque coupe coûte un plafond entier. Au-delà, c'est la
+# `fin_anormale` d'avant, inchangée. Seul un provider qui sait rejouer un tour coupé
+# (`reprise_sur_coupe` : la voie Chat Completions, sur OpenRouter seulement) y entre ;
+# ailleurs — Anthropic, Mistral, Scaleway — la coupe reste terminale.
+REPRISES_SUR_COUPE = 2
+
+
+def consigne_de_reprise(plafond: Optional[int], abandonnes: int, rejoue: bool) -> str:
+    """Le message user qui suit un tour coupé. En anglais, comme le prompt système de
+    la plateforme ; il rappelle la langue de la consigne, pour que le rapport ne la
+    quitte pas. `rejoue` : le tour coupé est-il dans le fil ? Sinon (ni texte ni appel
+    complet, tout le plafond parti en raisonnement), « continue » ne désignerait rien."""
+    limite = f" ({plafond} tokens)" if plafond else ""
+    lignes = [f"Your previous reply was cut off at the output limit{limite}: its end "
+              "was lost." if rejoue else
+              f"Your previous reply was cut off at the output limit{limite}: nothing "
+              "of it was kept."]
+    if abandonnes:
+        lignes.append(f"{abandonnes} tool call(s) cut mid-way were dropped and NOT "
+                      "executed.")
+    lignes.append("Do not rewrite what you already wrote. Continue from where you "
+                  "stopped" if rejoue else "Restart that step")
+    lignes[-1] += (", and write results with the tools in smaller batches — several "
+                   "short tool calls rather than one long reply. Keep writing in the "
+                   "language of your instruction.")
+    return " ".join(lignes)
+
 
 def max_steps_declare(brut) -> Optional[int]:
     """Le `max_steps` DÉCLARÉ, lu d'une charge ou d'une déclaration. Absent (None) : pas
@@ -377,7 +411,7 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
     `on_event(type, champs)` reçoit le journal ENTIER du déroulé : `systeme`,
     `historique` (le fil rechargé, tel que transporté), `utilisateur`, `modele`
     (un par tour, arguments d'appel complets), `outil` (un par appel, sortie
-    complète), `fin`. Rien n'y est tronqué."""
+    complète), `reprise_longueur` (un tour coupé, repris), `fin`. Rien n'y est tronqué."""
     def note(ev: str, **champs) -> None:
         if on_event:
             on_event(ev, champs)
@@ -417,6 +451,12 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
     servi: Optional[str] = None
     defaut: Optional[dict] = None
     n_tours = 0
+    # La reprise d'un tour coupé (cf. `REPRISES_SUR_COUPE`) : le crochet du provider,
+    # les reprises consécutives, et le défaut du DERNIER tour s'il a été repris — une
+    # borne qui arrête le déroulé juste après garde la fin de ce tour, pas la sienne.
+    reprendre = getattr(provider, "reprise_sur_coupe", None)
+    reprises = 0
+    coupe: Optional[dict] = None
     debut_deroule = time.monotonic()
     # Les images déjà entrées dans le fil de CE déroulé (`contenu_outil.admettre`).
     images_n = images_b64 = 0
@@ -494,10 +534,20 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         # la réponse ou l'appel de ce tour peut être incomplet. Rien n'est exécuté ni
         # conclu ; la boucle s'arrête en la NOMMANT, et qui conclut le travail en fait
         # un échec (audit du 13/09/2026 : `length` sans appel concluait `done`).
+        # Seule exception : la sortie coupée au plafond, que le provider sait rejouer
+        # (vécu le 15/11/2026) — dans la borne des reprises consécutives. Le tour coupé ne
+        # conclut toujours rien ; seuls ses appels COMPLETS s'exécutent.
+        reprise = None
         if turn.stop_reason == "fin_anormale":
-            note("fin_anormale", **(turn.defaut or {}), tour=n_tours)
-            stopped, reply, defaut = "fin_anormale", "", turn.defaut
-            break
+            reprise = (reprendre(turn) if reprendre and reprises < REPRISES_SUR_COUPE
+                       else None)
+            if reprise is None:
+                note("fin_anormale", **(turn.defaut or {}), tour=n_tours)
+                stopped, reply, defaut = "fin_anormale", "", turn.defaut
+                break
+            reprises, coupe = reprises + 1, turn.defaut
+        else:
+            reprises, coupe = 0, None
 
         # ⚠️ La borne se vérifie APRÈS le tour, jamais avant : on ne connaît le
         # coût d'un tour qu'une fois qu'il a eu lieu. Elle empêche donc le tour
@@ -528,22 +578,35 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
             stopped, reply = "refusal", ""
             break
 
-        assistant_raw = provider.assistant_message(turn)
-        messages.append(assistant_raw)
-        if on_turn:
-            on_turn("assistant",
-                    {"text": turn.text,
-                     "tool_calls": [{"name": c.name} for c in turn.tool_calls]},
-                    assistant_raw)
+        if reprise is not None:
+            # Le tour COUPÉ se rejoue tel que le provider l'a assaini (ses seuls appels
+            # complets), et la consigne de reprise le suit, après les résultats. Les
+            # deux s'apposent au fil du backend : une reprise du run relit le même fil.
+            assistant_raw, appels, abandonnes = reprise
+            consigne = consigne_de_reprise(turn.plafond, abandonnes,
+                                           rejoue=assistant_raw is not None)
+            note("reprise_longueur", **(turn.defaut or {}), tour=n_tours,
+                 reprise=reprises, reprises_max=REPRISES_SUR_COUPE,
+                 plafond=turn.plafond, appels_gardes=[c.name for c in appels],
+                 appels_abandonnes=abandonnes, consigne=consigne)
+        else:
+            assistant_raw, appels = provider.assistant_message(turn), turn.tool_calls
+        if assistant_raw is not None:
+            messages.append(assistant_raw)
+            if on_turn:
+                on_turn("assistant",
+                        {"text": turn.text,
+                         "tool_calls": [{"name": c.name} for c in appels]},
+                        assistant_raw)
 
-        if not turn.wants_tools:
+        if reprise is None and not turn.wants_tools:
             reply, stopped = turn.text, "end_turn"
             break
 
         results = []
         persistes = []
         neutre = []
-        for call in turn.tool_calls:
+        for call in appels:
             started = time.monotonic()
             text, is_error, transport_ko, rendues = execute_tool(spec, transport, call)
             ms = int((time.monotonic() - started) * 1000)
@@ -588,11 +651,26 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
             messages.append(tool_raw)
             if on_turn:
                 on_turn("tool", {"tool_calls": neutre}, tool_persiste)
-        if turn.text:
+        if reprise is not None:
+            # Le texte d'un tour coupé n'est pas une réponse : il ne devient jamais `reply`.
+            um = provider.user_message(consigne)
+            messages.append(um)
+            if on_turn:
+                on_turn("user", {"text": consigne}, um)
+        elif turn.text:
             reply = turn.text
 
     else:
         stopped = "max_steps"
+
+    # ⚠️ Une borne atteinte JUSTE APRÈS une reprise (jetons, durée, tours) ne conclut
+    # pas à la place du tour coupé : le travail n'a pas eu le tour qui devait le
+    # relever. La fin est celle d'avant la reprise — `fin_anormale`, nommée par la
+    # coupe —, jamais un `max_tokens` ou un `max_steps` qui se lirait en fin ordinaire.
+    if coupe is not None and stopped in ("max_steps", "max_tokens",
+                                         "max_tokens_non_mesurable", "max_seconds"):
+        note("fin_anormale", **coupe, tour=n_tours, borne=stopped)
+        stopped, reply, defaut = "fin_anormale", "", coupe
 
     if not reply and stopped == "end_turn":
         stopped = "no_reply"

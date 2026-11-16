@@ -132,6 +132,20 @@ réponse : une fiche fait 3–6 k, et `8192` coupe la réponse quand le modèle 
 raisonné avant (`finish_reason: length`, lisible au `stop_reason` du tour dans le
 journal du travail). `OTO_RUNNER_MAX_TOKENS` se règle par worker, comme le modèle.
 
+⚠️ **Une sortie coupée se reprend, deux fois de suite au plus** (voie Chat Completions
+sur OpenRouter, 15/11/2026). Vécu : au 7e tour, 99 avis BODACC en contexte, minimax-m3 a voulu tout
+classer dans UNE réponse — 41 251 caractères, 16 000 jetons, `length` après 163 s — et le
+travail mourait `fin_anormale` sur 6 pas des 90 permis. Désormais le tour coupé se
+rejoue (son texte, ses appels COMPLETS, exécutés ; un appel à demi écrit est écarté), le
+modèle lit qu'il a été coupé et qu'il doit écrire par petits lots avec les outils, et le
+déroulé continue, compté comme un tour ordinaire (événement `reprise_longueur`). Au-delà
+de `REPRISES_SUR_COUPE` (2) coupes consécutives, ou si une borne du déroulé tombe juste
+après, la fin reste `fin_anormale (length)`. Seule `length` se reprend : `model_length`
+(fenêtre de contexte pleine), `error` ou une fin absente restent terminales. Hors
+OpenRouter, rien ne change : la reprise pose un message `user` après des messages
+`role:tool`, un ordre que l'API Mistral a refusé (400) et que Scaleway n'a pas montré
+accepter ; la voie Anthropic (`max_tokens`) n'a pas de reprise non plus.
+
 ⚠️ **Le groupement des appels d'outils se règle** (chemin OpenAI-compatible).
 Mistral Large 3 groupe jusqu'à **13 appels dans un même tour**, puis écrit la
 fiche sans jamais reformuler une requête après un résultat décevant (mesuré le
@@ -170,6 +184,9 @@ modele       un par tour : texte, appels AVEC leurs arguments complets, usage, m
 outil        un par appel : arguments, sortie ENTIÈRE telle que rendue par le transport
              (`tronque_pour_le_modele` dit si le modèle en a lu une version plafonnée,
              `servi_chars` combien il en a reçu), ok, durée
+reprise_longueur  un tour coupé au plafond de complétion (`finish_reason: length`) et
+             repris : n° de reprise, appels gardés et écartés, consigne lue par le modèle
+fin_anormale le tour qui a arrêté le déroulé sur une fin anormale, avec son motif brut
 fin          la raison d'arrêt, la réponse, l'usage cumulé
 resultat     le résultat DÉCLARÉ à la plateforme, l'outcome, la clôture du run —
              **y compris quand le travail meurt** (`outcome: failed`), après l'`erreur`

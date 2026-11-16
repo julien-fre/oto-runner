@@ -542,6 +542,59 @@ def complete(*, system: str, messages: list, tools: list[dict],
                 defaut=defaut)
 
 
+#: La seule fin anormale dont un tour se RELÈVE : la sortie coupée au plafond de
+#: complétion. ⚠️ Pas `model_length` (Mistral) : c'est la FENÊTRE de contexte qui est
+#: pleine, et un tour de plus ne ferait que l'allonger. Ni `error`, ni une fin absente
+#: ou inconnue : rien n'y dit que la réponse n'était que trop longue.
+_FIN_REPRENABLE = "length"
+
+
+def reprise_sur_coupe(turn: Turn) -> Optional[tuple[Optional[dict], tuple[ToolCall, ...], int]]:
+    """Ce qu'un tour COUPÉ au plafond de complétion laisse rejouer — ou `None`.
+
+    ⚠️ Vécu le 15/11/2026 (minimax-m3 via OpenRouter). Au 7e tour, 99 avis
+    BODACC en contexte, le modèle a voulu tout classer dans UNE réponse : 41 251
+    caractères de texte, 16 000 jetons, `finish_reason: length` après 163 s. Le travail
+    finissait `fin_anormale` sur 6 pas des 90 permis, sans rien écrire.
+
+    Rend `(message, appels, abandonnes)` :
+    - `message` : le message assistant à REJOUER, copie du brut où ne restent que les
+      appels COMPLETS. `None` s'il ne porte rien (ni texte, ni appel) : un message
+      assistant vide se fait refuser par certains hôtes ;
+    - `appels` : les appels complets — leurs arguments se lisent en objet JSON. Un
+      objet JSON ne se lit pas avant son `}` final : un appel coupé en cours d'écriture
+      ne passe JAMAIS pour complet ;
+    - `abandonnes` : les appels écartés, à demi écrits. Ils quittent le message rejoué :
+      un `tool_calls` sans son message `role:tool` fait refuser le fil entier, et des
+      arguments illisibles rejoués tels quels aussi.
+
+    La décision de REPRENDRE appartient à la boucle (`agent_runtime`), qui la borne.
+
+    ⚠️ OpenRouter SEUL. La reprise pose un message `user` juste après des messages
+    `role:tool` (appels gardés) ou après un autre `user` (rien de rejoué), et l'API
+    Mistral a refusé ces ordres de messages (400). Non vérifié chez Mistral ni chez
+    Scaleway : la reprise y tuerait le travail sur un 400 APRÈS l'exécution des appels
+    gardés — pire que la `fin_anormale (length)` d'aujourd'hui, qui y reste."""
+    if depot() != _DEPOT_ROUTEUR:
+        return None
+    if turn.stop_reason != "fin_anormale" or \
+            (turn.defaut or {}).get("finish_reason") != _FIN_REPRENABLE:
+        return None
+    appels = tuple(c for c in turn.tool_calls
+                   if c.arguments_invalides is None and c.id and c.name)
+    gardes = {c.id for c in appels}
+    brut = dict(turn.raw_content) if isinstance(turn.raw_content, dict) else {
+        "role": "assistant", "content": turn.text}
+    tous = brut.pop("tool_calls", None) or []
+    abandonnes = len(tous) - len(appels)
+    restes = [tc for tc in tous if isinstance(tc, dict) and tc.get("id") in gardes]
+    if restes:
+        brut["tool_calls"] = restes
+    elif not turn.text:
+        return None, (), abandonnes
+    return brut, appels, abandonnes
+
+
 def _noms_envoyes(tools: list[dict]) -> frozenset:
     """Les noms des outils ENVOYÉS à ce tour (format OpenAI, cf. `format_tools`)."""
     return frozenset((t.get("function") or {}).get("name")
