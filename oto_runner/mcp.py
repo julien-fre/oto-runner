@@ -223,6 +223,7 @@ class McpSession:
         self._n = 0
         self._props: Optional[dict] = None   # tool → propriétés d'entrée déclarées
         self._outils: Optional[list] = None  # le tools/list de la session, lu UNE fois
+        self._lectures: Optional[frozenset] = None  # les outils DÉCLARÉS en lecture seule
         self._ouvrir()
 
     def _post(self, corps: dict, avec_entetes: bool = False):
@@ -297,6 +298,13 @@ class McpSession:
             self._outils = list(outils)
         out = []
         self._props = {}
+        # Ce que chaque outil DÉCLARE faire, tel que le serveur le sert : l'annotation
+        # standard du protocole `readOnlyHint`, posée par oto sur un outil dont TOUTES
+        # les opérations lisent. Absente ou fausse : l'outil n'est pas une lecture — on
+        # ne déduit jamais un effet de l'absence d'annotation.
+        self._lectures = frozenset(
+            t.get("name") for t in self._outils
+            if t.get("name") and (t.get("annotations") or {}).get("readOnlyHint") is True)
         self.descriptions_servies = []
         for t in self._outils:
             props = ((t.get("inputSchema") or {}).get("properties") or {})
@@ -321,6 +329,14 @@ class McpSession:
         if self._props is None:
             self.schemas(frozenset())
         return frozenset(self._props)
+
+    def en_lecture(self, name: str) -> bool:
+        """L'outil se DÉCLARE-t-il en lecture seule (`readOnlyHint`) dans le tools/list
+        de la session ? Sert la reprise d'un tour coupé (`agent_runtime`) : seule une
+        lecture s'y exécute."""
+        if self._lectures is None:
+            self.schemas(frozenset())
+        return name in self._lectures
 
     def _declares(self, name: str) -> frozenset:
         """Les propriétés d'entrée DÉCLARÉES par ce tool. C'est ce qui rend la

@@ -9,6 +9,9 @@ Ce que ces bancs tiennent :
 - une coupe se REPREND : le texte du tour se rejoue, ses appels COMPLETS s'exécutent, le
   modèle lit une consigne de reprise, et le déroulé continue jusqu'à sa vraie fin ;
 - un appel à demi écrit quitte le fil rejoué, n'est jamais exécuté, et la consigne le dit ;
+- le tour coupé n'ÉCRIT rien : seule une lecture DÉCLARÉE (`readOnlyHint` au tools/list)
+  s'exécute ; une écriture reste au fil avec un résultat « NOT executed », et la consigne
+  la nomme ; un transport qui ne sait pas classer n'exécute aucun appel du tour coupé ;
 - la borne : au-delà de `REPRISES_SUR_COUPE` coupes CONSÉCUTIVES, c'est la `fin_anormale`
   d'avant ; un tour normal remet le compte à zéro ;
 - une borne du déroulé (tours, jetons) atteinte juste après une coupe ne conclut pas à
@@ -43,11 +46,25 @@ def _openrouter(monkeypatch):
 
 
 def _appels(*paires):
-    """Un message assistant à plusieurs appels : `(id, arguments bruts)`."""
+    """Un message assistant à plusieurs appels : `(id, arguments bruts)` ou
+    `(id, arguments bruts, nom)` — `data_rows` par défaut."""
     return {"role": "assistant", "content": None,
-            "tool_calls": [{"id": i, "type": "function",
-                            "function": {"name": "data_rows", "arguments": a}}
-                           for i, a in paires]}
+            "tool_calls": [{"id": p[0], "type": "function",
+                            "function": {"name": p[2] if len(p) > 2 else "data_rows",
+                                         "arguments": p[1]}}
+                           for p in paires]}
+
+
+class _OutilsDeclares(_Outils):
+    """Un transport qui sait dire, comme `McpSession`, quels outils se déclarent en
+    lecture seule au serveur."""
+
+    def __init__(self, lectures=frozenset({"data_rows"})):
+        super().__init__()
+        self.lectures = lectures
+
+    def en_lecture(self, name):
+        return name in self.lectures
 
 
 def _servir(monkeypatch, *reponses):
@@ -111,7 +128,7 @@ def test_un_appel_a_demi_ecrit_est_ecarte_et_les_complets_s_executent(monkeypatc
     coupe["content"] = "J'écris le premier lot."
     corps = _servir(monkeypatch, _reponse(coupe, "length"),
                     _reponse(_texte("fini"), "stop"))
-    outils = _Outils()
+    outils = _OutilsDeclares()
     res, evenements, _ = _run(outils=outils)
     assert outils.appels == [("data_rows", {"limit": 3})], "seul l'appel complet agit"
     assert res.stopped == "end_turn" and res.reply == "fini"
@@ -142,6 +159,89 @@ def test_un_tour_coupe_sans_texte_ni_appel_complet_ne_rejoue_aucun_message_vide(
     assert "nothing of it was kept" in second[-1]["content"]
     assert "Restart that step" in second[-1]["content"]
     assert "Continue from where you stopped" not in second[-1]["content"]
+
+
+# ── 1 bis. Le tour coupé n'écrit rien ────────────────────────────────────────
+
+SPEC_RW = AgentSpec(system="s", tools=frozenset({"data_rows", "data_write"}), max_steps=10)
+
+
+def test_une_ecriture_du_tour_coupe_n_est_pas_executee_et_le_modele_le_sait(monkeypatch):
+    coupe = _appels(("c1", '{"limit": 3}'), ("c2", '{"limit": 4}', "data_write"))
+    corps = _servir(monkeypatch, _reponse(coupe, "length"),
+                    _reponse(_texte("fini"), "stop"))
+    outils = _OutilsDeclares()
+    res, evenements, fil = _run(spec=SPEC_RW, outils=outils)
+    assert outils.appels == [("data_rows", {"limit": 3})], "l'écriture n'a pas agi"
+    assert res.stopped == "end_turn" and res.reply == "fini"
+    assert [s.tool for s in res.steps] == ["data_rows"], "aucun pas pour l'écriture"
+    (reprise,) = _evs(evenements, "reprise_longueur")
+    assert reprise["appels_gardes"] == ["data_rows"]
+    assert reprise["appels_non_executes"] == ["data_write"]
+    assert reprise["classement"] == "readOnlyHint"
+    assert [o["nom"] for o in _evs(evenements, "outil")] == ["data_rows"]
+    # Le modèle le sait deux fois : le résultat de l'appel, et la consigne de reprise.
+    second = corps[1]["messages"]
+    assistant, lecture, ecriture, consigne = second[-4:]
+    assert [tc["id"] for tc in assistant["tool_calls"]] == ["c1", "c2"]
+    assert lecture["tool_call_id"] == "c1" and lecture["content"] == "3 lignes écrites"
+    assert ecriture["tool_call_id"] == "c2"
+    assert ecriture["content"].startswith("NOT executed")
+    assert "1 complete tool call(s) of that reply (data_write) were NOT executed" \
+        in consigne["content"]
+    assert "Redo those writes in your next reply" in consigne["content"]
+    # Le fil du backend porte le même résultat : une reprise du run relit qu'il n'a pas eu lieu.
+    assert any("NOT executed" in json.dumps(brut) for role, brut in fil if role == "tool")
+
+
+def test_une_lecture_complete_du_tour_coupe_s_execute(monkeypatch):
+    corps = _servir(monkeypatch, _reponse(_appels(("c1", '{"limit": 3}')), "length"),
+                    _reponse(_texte("fini"), "stop"))
+    outils = _OutilsDeclares()
+    res, evenements, _ = _run(outils=outils)
+    assert outils.appels == [("data_rows", {"limit": 3})]
+    (reprise,) = _evs(evenements, "reprise_longueur")
+    assert reprise["appels_non_executes"] == []
+    assert "NOT executed" not in corps[1]["messages"][-1]["content"]
+
+
+def test_sans_classement_aucun_appel_du_tour_coupe_ne_s_execute(monkeypatch):
+    """Un transport qui ne sait pas dire ce qui lit : on n'exécute rien, lecture comprise."""
+    corps = _servir(monkeypatch, _reponse(_appels(("c1", '{"limit": 3}')), "length"),
+                    _reponse(_texte("fini"), "stop"))
+    outils = _Outils()
+    res, evenements, _ = _run(outils=outils)
+    assert outils.appels == [] and res.stopped == "end_turn"
+    (reprise,) = _evs(evenements, "reprise_longueur")
+    assert reprise["classement"] == "indisponible"
+    assert reprise["appels_non_executes"] == ["data_rows"]
+    assert corps[1]["messages"][-2]["content"].startswith("NOT executed")
+
+
+def test_un_outil_sans_annotation_n_est_pas_une_lecture(monkeypatch):
+    """La session lit `readOnlyHint` au tools/list ; absent ou faux, ce n'est pas une
+    lecture — l'effet ne se déduit jamais de l'absence d'annotation."""
+    from oto_runner import mcp as M
+    from tests.test_description_des_outils import _INIT
+    from tests.test_description_des_outils import _reponse as _http
+    outils = [{"name": "data_rows", "annotations": {"readOnlyHint": True}},
+              {"name": "data_write", "annotations": {"readOnlyHint": False,
+                                                     "destructiveHint": True}},
+              {"name": "oto_doc"}]
+    liste = ("data: " + json.dumps({"jsonrpc": "2.0", "id": 2,
+                                    "result": {"tools": outils}})).encode()
+
+    def _post(url, **kw):
+        if (kw.get("json") or {}).get("method") in ("initialize", "notifications/initialized"):
+            return _http(_INIT, {"mcp-session-id": "s1"})
+        return _http(liste)
+
+    monkeypatch.setattr(M, "post_with_deadline", _post)
+    s = M.McpSession(url="http://x", token="t")
+    assert s.en_lecture("data_rows") is True
+    assert s.en_lecture("data_write") is False
+    assert s.en_lecture("oto_doc") is False
+    assert s.en_lecture("inconnu") is False
 
 
 # ── 2. La borne ──────────────────────────────────────────────────────────────

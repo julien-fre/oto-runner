@@ -76,14 +76,30 @@ MAX_HISTORY_MESSAGES = 60   # tours provider transportés au modèle (le fil com
 # `fin_anormale` d'avant, inchangée. Seul un provider qui sait rejouer un tour coupé
 # (`reprise_sur_coupe` : la voie Chat Completions, sur OpenRouter seulement) y entre ;
 # ailleurs — Anthropic, Mistral, Scaleway — la coupe reste terminale.
+#
+# ⚠️ Le tour coupé n'ÉCRIT rien. Seuls ses appels de LECTURE complets s'exécutent : un
+# tour coupé a pu écrire un lot qu'il comptait corriger plus loin dans la même réponse,
+# et ce « plus loin » est perdu. Une lecture se reconnaît à ce que l'outil DÉCLARE au
+# serveur (`readOnlyHint`, lu du tools/list par le transport : `en_lecture`) ; un outil
+# qui ne déclare rien, ou un transport qui ne sait pas le dire, n'exécute rien. Les
+# écritures retenues restent au fil, avec un résultat qui dit qu'elles n'ont pas eu
+# lieu, et la consigne de reprise demande de les refaire au tour suivant, complet.
 REPRISES_SUR_COUPE = 2
 
+#: Le résultat que lit le modèle pour un appel du tour coupé qui n'a PAS été exécuté.
+NON_EXECUTE = ("NOT executed: your reply was cut off at the output limit, and the "
+               "writes of a cut reply are never applied. Redo this call in your next, "
+               "complete reply.")
 
-def consigne_de_reprise(plafond: Optional[int], abandonnes: int, rejoue: bool) -> str:
+
+def consigne_de_reprise(plafond: Optional[int], abandonnes: int, rejoue: bool,
+                        retenus: tuple = ()) -> str:
     """Le message user qui suit un tour coupé. En anglais, comme le prompt système de
     la plateforme ; il rappelle la langue de la consigne, pour que le rapport ne la
     quitte pas. `rejoue` : le tour coupé est-il dans le fil ? Sinon (ni texte ni appel
-    complet, tout le plafond parti en raisonnement), « continue » ne désignerait rien."""
+    complet, tout le plafond parti en raisonnement), « continue » ne désignerait rien.
+    `retenus` : les noms des appels complets NON exécutés (tout ce qui n'est pas une
+    lecture déclarée) — le modèle doit savoir que ces écritures n'ont pas eu lieu."""
     limite = f" ({plafond} tokens)" if plafond else ""
     lignes = [f"Your previous reply was cut off at the output limit{limite}: its end "
               "was lost." if rejoue else
@@ -92,7 +108,12 @@ def consigne_de_reprise(plafond: Optional[int], abandonnes: int, rejoue: bool) -
     if abandonnes:
         lignes.append(f"{abandonnes} tool call(s) cut mid-way were dropped and NOT "
                       "executed.")
-    lignes.append("Do not rewrite what you already wrote. Continue from where you "
+    if retenus:
+        lignes.append(f"{len(retenus)} complete tool call(s) of that reply "
+                      f"({', '.join(sorted(set(retenus)))}) were NOT executed: only "
+                      "read-only calls run from a cut reply, nothing it writes is applied. "
+                      "Redo those writes in your next reply, complete.")
+    lignes.append("Do not rewrite the text you already wrote. Continue from where you "
                   "stopped" if rejoue else "Restart that step")
     lignes[-1] += (", and write results with the tools in smaller batches — several "
                    "short tool calls rather than one long reply. Keep writing in the "
@@ -118,7 +139,11 @@ class ToolTransport(Protocol):
 
     `schemas(names)` → [{name, description, input_schema}] ; `call(name, args)` →
     (texte, is_error, images). Les gates et la rédaction sont CÔTÉ SERVEUR — le
-    transport ne filtre rien, il transporte."""
+    transport ne filtre rien, il transporte.
+
+    Facultatif : `en_lecture(name)` → l'outil se déclare-t-il en lecture seule au
+    serveur (`readOnlyHint`) ? Seule la reprise d'un tour coupé le lit ; un transport
+    qui ne l'a pas n'y exécute aucun appel."""
     def schemas(self, names: frozenset) -> list[dict]: ...
     def call(self, name: str, arguments: dict) -> tuple[str, bool, tuple[Image, ...]]: ...
 
@@ -536,7 +561,8 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         # un échec (audit du 13/09/2026 : `length` sans appel concluait `done`).
         # Seule exception : la sortie coupée au plafond, que le provider sait rejouer
         # (vécu le 15/11/2026) — dans la borne des reprises consécutives. Le tour coupé ne
-        # conclut toujours rien ; seuls ses appels COMPLETS s'exécutent.
+        # conclut toujours rien, et n'écrit rien : seules ses LECTURES complètes
+        # s'exécutent (cf. `REPRISES_SUR_COUPE`).
         reprise = None
         if turn.stop_reason == "fin_anormale":
             reprise = (reprendre(turn) if reprendre and reprises < REPRISES_SUR_COUPE
@@ -583,14 +609,22 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
             # complets), et la consigne de reprise le suit, après les résultats. Les
             # deux s'apposent au fil du backend : une reprise du run relit le même fil.
             assistant_raw, appels, abandonnes = reprise
+            lit = getattr(transport, "en_lecture", None)
+            retenus = frozenset(c.id for c in appels if not (lit and lit(c.name)))
+            noms_retenus = tuple(c.name for c in appels if c.id in retenus)
             consigne = consigne_de_reprise(turn.plafond, abandonnes,
-                                           rejoue=assistant_raw is not None)
+                                           rejoue=assistant_raw is not None,
+                                           retenus=noms_retenus)
             note("reprise_longueur", **(turn.defaut or {}), tour=n_tours,
                  reprise=reprises, reprises_max=REPRISES_SUR_COUPE,
-                 plafond=turn.plafond, appels_gardes=[c.name for c in appels],
+                 plafond=turn.plafond,
+                 appels_gardes=[c.name for c in appels if c.id not in retenus],
+                 appels_non_executes=list(noms_retenus),
+                 classement="readOnlyHint" if lit else "indisponible",
                  appels_abandonnes=abandonnes, consigne=consigne)
         else:
             assistant_raw, appels = provider.assistant_message(turn), turn.tool_calls
+            retenus = frozenset()
         if assistant_raw is not None:
             messages.append(assistant_raw)
             if on_turn:
@@ -607,6 +641,15 @@ def _run(spec: AgentSpec, transport: ToolTransport, provider, compte: dict,
         persistes = []
         neutre = []
         for call in appels:
+            if call.id in retenus:
+                # Une écriture du tour coupé : rien ne part, ni pas ni journal `outil`
+                # (`reprise_longueur` la nomme). Le modèle lit qu'elle n'a pas eu lieu.
+                non_fait = {"id": call.id, "text": NON_EXECUTE, "is_error": True,
+                            "images": ()}
+                results.append(non_fait)
+                persistes.append(non_fait)
+                neutre.append({"name": call.name, "ok": False, "duration_ms": 0})
+                continue
             started = time.monotonic()
             text, is_error, transport_ko, rendues = execute_tool(spec, transport, call)
             ms = int((time.monotonic() - started) * 1000)
