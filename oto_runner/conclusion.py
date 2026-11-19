@@ -53,6 +53,19 @@ class RunEnCours:
     agent: RunsDeLAgent = field(default_factory=RunsDeLAgent)
 
 
+def fermer_la_session(tenu: RunEnCours) -> None:
+    """Ferme la session MCP que le travail tient, s'il en tient une — le DERNIER geste
+    d'un travail, dans le `finally` de `worker._un_travail`, après la clôture du run
+    (`clore`, `en_echec`), qui passe encore par elle.
+
+    `McpSession.fermer` ne lève jamais. Une doublure de banc sans `fermer` (le
+    transport des bancs n'a que la boucle à servir) ne ferme rien, comme `catalogue`
+    dans `worker._traiter`."""
+    fermer = getattr(tenu.mcp, "fermer", None)
+    if fermer is not None:
+        fermer()
+
+
 # L'issue d'un run oublié par l'agent, selon celle du TRAVAIL. Un travail `done` ne
 # prouve pas que le run de l'agent a tout fait — il s'est arrêté avant sa dernière
 # étape : `partial`, avec la note qui le dit (le serveur l'exige).

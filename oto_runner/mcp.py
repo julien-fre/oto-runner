@@ -33,12 +33,16 @@ import requests  # noqa: F401 — la forme des kwargs
 
 from .agent_runtime import serialize
 from .contenu_outil import Image, lire
-from .deadline import post_with_deadline
+from .deadline import delete_with_deadline, post_with_deadline
 from .descriptions import borne as _borne, reglage as _reglage_descriptions
 
 logger = logging.getLogger("oto_runner")
 
 _TIMEOUT = (10, 180)
+#: La fermeture d'une session est une politesse envers le serveur, jamais une étape du
+#: travail : quelques secondes au plus, puis on passe (cf. `McpSession.fermer`).
+_TIMEOUT_FERMETURE = (3, 5)
+_MUR_FERMETURE_S = 8
 # La signature d'une session que le serveur ne connaît plus : son message, et le
 # code JSON-RPC qu'il rend quand l'en-tête `Mcp-Session-Id` est refusé. Un
 # `-32600` (« Invalid Request ») n'a de toute façon jamais été exécuté : le
@@ -274,6 +278,43 @@ class McpSession:
             _t.sleep(5 * (essai + 1))
         raise RuntimeError(
             "initialize MCP sans session id après 3 essais — backend indisponible ?")
+
+    def fermer(self) -> None:
+        """Ferme la session côté serveur : `DELETE` sur l'URL MCP, avec son
+        `Mcp-Session-Id` et le même jeton (spec Streamable HTTP, « Session Management »).
+
+        Pourquoi : le runner ouvre une session par travail et n'en fermait aucune.
+        Côté serveur, chaque session garde sa mémoire (quelques Mo, `tools/list`
+        compris) jusqu'à sa fermeture pour inactivité — une flotte en laissait une
+        par travail, pendant toute la borne d'inactivité.
+
+        Idempotente : l'id part AVANT la requête, un second appel ne fait rien.
+        Ne lève JAMAIS : elle tourne dans le `finally` d'un travail, et une
+        fermeture ratée ne doit ni masquer la vraie erreur du travail ni en
+        fabriquer une. Un 404 (session déjà oubliée : redéploiement, inactivité)
+        ou un 405 (serveur qui ne ferme pas sur demande) se dit en DEBUG ; tout
+        autre refus, ou une erreur réseau, en WARNING — le serveur la fermera de
+        toute façon à l'inactivité."""
+        session, self.session = self.session, None
+        if not session:
+            return
+        try:
+            r = delete_with_deadline(
+                self.url, headers={"Authorization": f"Bearer {self.token}",
+                                   "Mcp-Session-Id": session},
+                timeout=_TIMEOUT_FERMETURE, wall_s=_MUR_FERMETURE_S)
+        except Exception as e:  # noqa: BLE001 — cf. docstring ; jamais en silence
+            logger.warning("session MCP %s… non fermée (%s : %s) — le serveur la "
+                           "fermera à l'inactivité", session[:8], type(e).__name__, e)
+            return
+        if r.status_code in (404, 405):
+            logger.debug("session MCP %s… : DELETE → %s (déjà oubliée, ou fermeture "
+                         "sur demande non servie)", session[:8], r.status_code)
+        elif r.status_code >= 400:
+            logger.warning("session MCP %s… : DELETE refusé (%s) — le serveur la "
+                           "fermera à l'inactivité", session[:8], r.status_code)
+        else:
+            logger.debug("session MCP %s… fermée", session[:8])
 
     # ── le contrat ToolTransport de la boucle ────────────────────────────────
     def schemas(self, names: frozenset) -> list[dict]:

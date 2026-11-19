@@ -279,6 +279,20 @@ exécuté, le rejeu ne peut pas doubler une écriture. Si la réouverture échou
 une ligne, n'a rien écrit, et porte des appels morts au transport : le backend
 le rejoue. Il n'existe pas d'issue légitime « conclu, rien écrit ».
 
+### Une session MCP se ferme à la fin de son travail
+
+Le worker ouvre une session MCP par travail, le relais d'un sandbox une de plus.
+Côté serveur, une session garde sa mémoire jusqu'à sa fermeture pour inactivité :
+le runner la ferme donc lui-même, par un `DELETE` sur l'URL MCP avec son
+`Mcp-Session-Id` et le même jeton (spec Streamable HTTP). Le worker le fait dans
+le `finally` de chaque travail (`_un_travail`), après la clôture du run, qui passe
+encore par elle : conclu, en échec, délai dépassé ou interrompu. À l'arrêt
+(SIGTERM), le travail en cours va à son terme et ferme la sienne ; le relais ferme
+la sienne quand le CLI referme son entrée, ou au SIGTERM. La fermeture est
+idempotente, bornée à quelques secondes, et ne lève jamais : un 404 ou un 405 se
+dit en DEBUG, tout autre échec en WARNING, et le serveur fermera la session à
+l'inactivité.
+
 ## Le modèle : déclaré par l'agent, servi par le worker
 
 Jusqu'au 12/09/2026 le modèle était épinglé par worker (`OTO_RUNNER_MODEL`), et

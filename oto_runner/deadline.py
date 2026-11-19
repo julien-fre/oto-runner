@@ -28,6 +28,10 @@ def get_with_deadline(url: str, *, wall_s: int = _DEFAULT_WALL_S, **kwargs):
     return _with_deadline(requests.get, url, wall_s=wall_s, **kwargs)
 
 
+def delete_with_deadline(url: str, *, wall_s: int = _DEFAULT_WALL_S, **kwargs):
+    return _with_deadline(requests.delete, url, wall_s=wall_s, **kwargs)
+
+
 def _with_deadline(fn, url, *, wall_s, **kwargs):
     def _coupe(signum, frame):
         raise DeadlineExceeded(

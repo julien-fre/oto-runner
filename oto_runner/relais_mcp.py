@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 from typing import Optional
 
@@ -94,15 +95,32 @@ class Relais:
                 "isError": erreur}
 
 
+def _sortir_sur_signal(signum, _frame) -> None:
+    """SIGTERM : le relais SORT par une exception, pour que le `finally` de `main`
+    ferme la session. Le défaut du signal tuerait le processus sans rien fermer."""
+    raise SystemExit(128 + signum)
+
+
+def servir(relais: Relais, entree, sortie) -> None:
+    """La boucle du relais, jusqu'à la fin de l'entrée — ou jusqu'à ce qu'elle lève.
+    La session se FERME dans tous les cas : le CLI qui referme l'entrée, le signal
+    d'arrêt, une ligne illisible. Sans ça, chaque travail de la voie sandbox laissait
+    une seconde session ouverte côté serveur jusqu'à sa fermeture pour inactivité."""
+    try:
+        for ligne in entree:
+            if not ligne.strip():
+                continue
+            reponse = relais.repondre(json.loads(ligne))
+            if reponse is not None:
+                sortie.write(json.dumps(reponse, ensure_ascii=False) + "\n")
+                sortie.flush()
+    finally:
+        relais.session.fermer()
+
+
 def main() -> None:
-    relais = Relais(_session(), _allowlist())
-    for ligne in sys.stdin:
-        if not ligne.strip():
-            continue
-        reponse = relais.repondre(json.loads(ligne))
-        if reponse is not None:
-            sys.stdout.write(json.dumps(reponse, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+    signal.signal(signal.SIGTERM, _sortir_sur_signal)
+    servir(Relais(_session(), _allowlist()), sys.stdin, sys.stdout)
 
 
 if __name__ == "__main__":

@@ -941,6 +941,12 @@ def _un_travail(backend: Backend, job: dict, provider, file=None) -> None:
                             or _modele_courant(provider))
         logger.exception("job %s en échec — journal : %s", job.get("id"),
                          journal.relu(j.chemin))
+    finally:
+        # La session MCP du travail se FERME, sur tous les chemins : conclu, en échec,
+        # refusé, délai dépassé, ou interrompu (KeyboardInterrupt, SystemExit). Après la
+        # clôture du run, qui passe encore par elle. Sans ça, chaque travail laissait
+        # une session ouverte côté serveur jusqu'à sa fermeture pour inactivité.
+        conclusion.fermer_la_session(tenu)
 
 
 def _secret_du_worker() -> str:
