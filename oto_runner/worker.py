@@ -26,7 +26,7 @@ import signal
 import time
 from typing import Optional
 
-from . import agent_runtime, conclusion, journal
+from . import agent_runtime, conclusion, journal, recette
 from .llm_select import get_provider
 from .agent_runtime import AgentSpec
 from .backend import Backend, BackendError
@@ -683,6 +683,23 @@ def _traiter(backend: Backend, job: dict, provider,
         # Le serveur a DÉJÀ marqué le travail en échec avec sa raison. On la
         # remonte au journal et on passe : la retenter serait rejouer le refus.
         raise IdentiteInvalide(refus)
+    # ⚠️ Le travail RECETTE d'abord (`recette.py`) : aucune boucle, aucun modèle — donc
+    # ni famille, ni effort, ni clé, ni forfait à vérifier. Un worker de recettes ne
+    # sert QUE ceux-là ; un worker de modèle n'en reçoit jamais (sa famille ne
+    # correspond à aucun dépôt de clé), et le dit s'il en recevait un.
+    if recette.est_recette(job):
+        if provider is not recette:
+            raise recette.RecetteHorsMode(
+                f"le travail {job.get('id')} joue une recette et ce worker sert un modèle "
+                f"({_moteur(provider)}) : il n'est pas exécuté. Les recettes se servent par "
+                f"un worker `{recette.ENV_DEPOT}={recette.DEPOT}`.")
+        recette.traiter(backend, job, file, note, tenu,
+                        mcp_factory=lambda **kw: McpSession(**kw))
+        return
+    if provider is recette:
+        raise recette.TravailNonRecette(
+            f"le travail {job.get('id')} ne porte pas de recette et ce worker ne sert que "
+            f"des recettes (`{recette.ENV_DEPOT}={recette.DEPOT}`) : il n'est pas exécuté.")
     # La famille demandée vs celle que ce worker sert — AVANT d'ouvrir une
     # session MCP ou un run : un travail qu'on ne peut pas exécuter ne doit rien
     # coûter, et surtout ne rien laisser derrière lui.
@@ -1013,6 +1030,9 @@ def main() -> None:
             "réel est gaté par la relecture d'architecture du chantier R2. Ce cran "
             "existe pour qu'un worker lancé par accident ne consomme rien.")
     backend = Backend(token=_secret_du_worker())
+    if recette.mode_recette():
+        _boucle_des_recettes(backend)
+        return
     provider = get_provider()
     # Le journal par travail est le contrat « conserver tout » : un répertoire
     # qu'on ne peut pas écrire se dit ICI, pas en faisant échouer le 1er travail.
@@ -1093,6 +1113,34 @@ def main() -> None:
             if place:
                 provider.lacher_place()     # le travail refusé avant son run la rend ici
     logger.info("agent sorti proprement — aucun travail interrompu")
+
+
+def _boucle_des_recettes(backend: Backend) -> None:
+    """Le worker de RECETTES (`OTO_RUNNER_DEPOT=recette`) : aucun provider, aucune
+    clé de modèle. Il réserve avec le dépôt `recette` — la seule famille que le
+    backend lui serve — et joue chaque travail par `recette.traiter`."""
+    passages = journal.preparer()
+    orgs = _orgs_servies()
+    logger.info("worker de recettes armé — file de %s · dépôt %s · journaux dans %s",
+                backend.base, recette.DEPOT, passages)
+    signal.signal(signal.SIGTERM, _demander_arret)
+    signal.signal(signal.SIGINT, _demander_arret)
+    while not _arret_demande:
+        try:
+            job = backend.claim(lease_seconds=recette.BAIL_S, depot=recette.DEPOT,
+                                **({"org_ids": orgs} if orgs else {}))
+        except BackendError as e:
+            logger.warning("claim : %s", e)
+            job = None
+        if not job:
+            time.sleep(_attente_a_vide())
+            continue
+        if _arret_demande:
+            logger.info("arrêt demandé pendant la réservation — job %s rendu à la "
+                        "file sans être entamé", job.get("id"))
+            break
+        _un_travail(backend, job, recette)
+    logger.info("worker de recettes sorti proprement")
 
 
 if __name__ == "__main__":

@@ -101,7 +101,9 @@ class Backend:
                                f"{str(e)[:200]}", status=None)
 
     def _post(self, chemin: str, corps: dict,
-              org: Optional[int] = None, token: Optional[str] = None) -> dict:
+              org: Optional[int] = None, token: Optional[str] = None,
+              wall_s: int = 120, timeout=_TIMEOUT,
+              run: Optional[str] = None) -> dict:
         """⚠️ `org` part en EN-TÊTE `X-Oto-Org`, jamais dans le corps. La face
         REST lit l'org de contexte là, et son modèle d'entrée refuse les champs
         qu'il ne déclare pas : un `_org` glissé dans le corps fait `400
@@ -116,8 +118,12 @@ class Backend:
         cible = org if org is not None else self.org
         if cible is not None:
             entetes["X-Oto-Org"] = str(cible)
-        r = self._reseau(chemin, post_with_deadline, json=corps, timeout=_TIMEOUT,
-                         headers=entetes, wall_s=120)
+        # Le run de la requête : la face REST le lit en `X-Oto-Run` (oto#227) et le
+        # pose là où le MCP pose `_run_id` — jamais dans le corps (`unknown_fields`).
+        if run:
+            entetes["X-Oto-Run"] = str(run)
+        r = self._reseau(chemin, post_with_deadline, json=corps, timeout=timeout,
+                         headers=entetes, wall_s=wall_s)
         if r.status_code >= 400:
             try:
                 code = r.json().get("error")
@@ -441,6 +447,15 @@ class Backend:
         return self._post("/api/me/runner/jobs",
                           {"op": "meter", "job_id": job_id, "turn": turn,
                            "result": usage})
+
+    def run_recipe(self, corps: dict, *, token: str, org: Optional[int],
+                   run: Optional[str] = None, wall_s: int = 900) -> dict:
+        """`POST /api/me/recipes {op: "run"}` — une recette d'org jouée côté serveur,
+        au nom du jeton DÉLÉGUÉ du travail (`recette.py`). La route tient la requête
+        jusqu'au reçu (plusieurs minutes pour une recette-code) : l'échéance murale et
+        la lecture suivent `wall_s`, jamais les 60 s des appels de file."""
+        return self._post("/api/me/recipes", corps, org=org, token=token,
+                          wall_s=wall_s, timeout=(10, wall_s), run=run)
 
     def extend(self, job_id: int, lease_seconds: int = 600) -> None:
         self._post("/api/me/runner/jobs",
