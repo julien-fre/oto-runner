@@ -111,6 +111,17 @@ def test_une_borne_atteinte_conclut_partial(mcps):
     assert fin["outcome"] == "partial" and "max_pages" in fin["note"]
 
 
+def test_un_recu_en_echec_conclut_le_travail_en_echec(mcps):
+    b = _FauxBackend({"receipt": {"stopped": "invalid_input", "error": "unrecognized field(s): q",
+                                  "rows_built": 0}})
+    W._traiter(b, _job(), recette)
+    _, _, ok, erreur, _, res = b.gestes[-1]
+    assert ok is False and res["outcome"] == "failed"
+    assert "invalid_input" in erreur and "unrecognized" in erreur
+    fin = [a for a in mcps[0].appels if a[0] == "run_finish"][0][1]
+    assert fin["outcome"] == "failed"
+
+
 def test_un_refus_de_la_route_echoue_en_nommant_son_code(mcps):
     b = _FauxBackend(refus=BackendError("/api/me/recipes → 409 : pas publiée",
                                         status=409, code="recipe_not_published"))
@@ -214,6 +225,13 @@ def test_le_run_part_en_en_tete(monkeypatch):
 
 
 @pytest.mark.parametrize("arret,issue", [(None, "done"), ("", "done"), ("end", "done"),
-                                         ("max_units", "partial"), ("mapping_drift", "partial")])
+                                         ("max_units", "partial"), ("max_pages", "partial"),
+                                         ("mapping_drift", "failed")])
 def test_issue_du_recu(arret, issue):
     assert recette.issue_du_recu({"stopped": arret}) == issue
+
+
+def test_un_recu_qui_porte_une_erreur_est_un_echec():
+    """Vu en e2e local : `invalid_input` (arguments refusés, non rejouable) sortait `partial`."""
+    assert recette.issue_du_recu({"stopped": "invalid_input", "error": "unrecognized field"}) == "failed"
+    assert recette.issue_du_recu({"stopped": "call_refused", "error": "x"}) == "failed"

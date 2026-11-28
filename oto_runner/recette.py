@@ -81,10 +81,23 @@ def est_recette(job: dict) -> bool:
     return bool((job.get("payload") or {}).get("recipe"))
 
 
+#: Arrêts qui disent que la recette n'a PAS fait son travail, même sans `error` posé :
+#: la forme des données a dérivé (le moteur refuse d'écrire des colonnes vides).
+_ARRETS_EN_ECHEC = frozenset({"mapping_drift"})
+
+
 def issue_du_recu(recu: Optional[dict]) -> str:
-    """`done` quand la recette est allée au bout, `partial` sur toute borne."""
-    arret = (recu or {}).get("stopped")
-    return "done" if arret in _FINS_NATURELLES else "partial"
+    """`done` quand la recette est allée au bout ; `failed` quand le reçu porte une
+    ERREUR (outil refusé, arguments invalides, échec répété…) ou un arrêt d'échec ;
+    `partial` sur une BORNE (pages, budget, temps : elle reprendra). Vu en e2e local
+    (28/11/2026) : `invalid_input` non rejouable sortait `partial`."""
+    recu = recu or {}
+    arret = recu.get("stopped")
+    if arret in _FINS_NATURELLES:
+        return "done"
+    if recu.get("error") or arret in _ARRETS_EN_ECHEC:
+        return "failed"
+    return "partial"
 
 
 def ligne_de_comptes(recu: Optional[dict], issue: str) -> str:
@@ -152,4 +165,9 @@ def traiter(backend, job: dict, file, note, tenu, mcp_factory) -> None:
     cloture = conclusion.clore(tenu, issue, note=ligne, job_id=job.get("id"))
     resultat = {"recipe_receipt": recu, "outcome": issue}
     note("resultat", outcome=issue, run_id=run_id, run_finish=cloture, resultat=resultat)
-    file.complete(job["id"], ok=True, run_id=run_id, result=resultat)
+    # Un reçu en échec conclut le travail en échec (alertes, historique) — avec l'erreur
+    # du reçu, jamais un succès qui la cacherait.
+    erreur = None
+    if issue == "failed":
+        erreur = f"{(recu or {}).get('stopped') or 'recipe_failed'}: {(recu or {}).get('error') or ''}"[:conclusion._NOTE_MAX]
+    file.complete(job["id"], ok=issue != "failed", error=erreur, run_id=run_id, result=resultat)
